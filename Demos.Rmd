@@ -1,0 +1,156 @@
+---
+title: "Demos"
+output: html_document
+date: "2023-01-16"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# libs and dat
+```{r}
+# clear workspace
+# rm(list=ls())
+library(tidyverse)
+library(psych)
+library(psychometric)
+
+ema <- read.csv("dat.csv", header = TRUE, sep=",", stringsAsFactors = TRUE)
+baseline <- read.csv("baseline.csv", header = TRUE, sep=",", stringsAsFactors = TRUE)
+dx <- read.csv("dx.csv", header = TRUE, sep=",", stringsAsFactors = TRUE)
+mlmdat <- read.csv("mlmdat_statetraitcent.csv", header = TRUE, sep=",", stringsAsFactors = TRUE) # saved in MealtimeEmotions.Rmd line 67
+```
+
+# id check
+```{r}
+setdiff(dx$ID_Number,ema$unique_id) # 0
+setdiff(ema$unique_id, dx$ID_Number) # 0
+setdiff(ema$unique_id, baseline$unique_id) # 0
+setdiff(baseline$unique_id, ema$unique_id) # 0
+setdiff(dx$ID_Number,baseline$unique_id) # 0
+setdiff(baseline$unique_id, dx$ID_Number) # 0
+
+length(unique(ema$unique_id)) # 108
+length(unique(baseline$unique_id)) # 108
+length(unique(dx$ID_Number)) # 108
+length(unique(mlmdat$unique_id)) # 108
+```
+
+# demos
+
+## gender
+
+4 men (3.70%), 102 women (94.44%), 1 not listed (0.93%), 1 NA (0.93%)
+```{r}
+table(baseline$gender, useNA = "ifany")
+# 4 men, 102 women, 1 not listed, 1 NA
+round(prop.table(table(baseline$gender, useNA = "ifany"))*100,2)
+```
+
+## race
+
+AAPI = 6 (5.56%), Native American/Indigenous = 1 (0.93%), Black = 3 (2.78%), Hispanic = 6 (5.56%), Multi-/Bi-racial = 4 (3.70%), White = 88 (81.48%)
+```{r}
+table(baseline$ethnicity, useNA = "ifany")
+round(prop.table(table(baseline$ethnicity, useNA = "ifany"))*100,2)
+```
+
+## SES
+Years in school: M = 16.21, SD = 2.17, Range = 11-22
+Work status: 29 not working (26.85%), 52 full time (48.15%), 26 part time (24.07%), 1 NA (0.93%)
+```{r}
+#### years education ####
+# table(baseline$total_school_years)
+describe(baseline$total_school_years) # 16.21 (sd=2.17, min = 11, max = 22)  
+
+#### work status ####
+table(baseline$work_status, useNA = "ifany")
+# 29 not working, 52 working full time, 26 working part time, 1 NA
+round(prop.table(table(baseline$work_status, useNA = "ifany"))*100,2)
+```
+
+## primary diagnosis
+AN = 35 (32.41%), BED = 4 (3.70%), BN = 17 (15.74%), OSFED = 52 (48.15%)
+```{r}
+table(dx$CurrentDx_general, useNA = "ifany")
+# AN = 35, ARFID = 0, BED = 4, BN = 17, OSFED = 52
+round(prop.table(table(dx$CurrentDx_general, useNA = "ifany"))*100,2)
+```
+
+# Supplement 1
+## group
+```{r}
+# long
+dat_plot <- mlmdat
+dat_plot <- dat_plot[-which(dat_plot$beep==5),]
+dat_plot <- dat_plot[,c(1,3:5,8:10,13)]
+dat_plot <- dat_plot %>% dplyr::rename(avoid=avoidemo, phys=physuncomfort)
+dat_plot <- dat_plot %>% pivot_longer(
+  cols=!1:4,
+  names_to = "var",
+  values_to = "value"
+)
+
+dat_plot2 <- dat_plot[4:6]
+
+dat_plot2 <- dat_plot2 %>% 
+  dplyr::group_by(var, beepcont) %>% 
+  dplyr::summarise(mean=mean(value))
+
+group_plot <- dat_plot2 %>% 
+  dplyr::filter(beepcont<101) %>% 
+  ggplot(aes(x=beepcont, y=mean, color=var)) +
+  geom_line() +
+  theme_classic() +
+  labs(x="time", color="variable") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom") +
+  scale_color_manual(values=c("#E69F00", "#56B4E9", "#009E73","#CC79A7"))
+
+ggsave(group_plot, filename = "groupplot_current.png", bg = "transparent", width = 9, height =5)
+```
+
+## idio
+```{r}
+idiovar_plot <- dat_plot %>% 
+  ggplot(aes(x=beepcont, y=value, color=var)) +
+  geom_line() +
+  theme_classic() +
+  labs(x="time", color="variable") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom") +
+  scale_color_manual(values=c("#E69F00", "#56B4E9", "#009E73","#CC79A7")) +  facet_wrap(~unique_id) 
+ggsave(idiovar_plot, filename = "idiovarplot_current.png", bg="transparent", width=13)
+```
+
+# Supplement 2
+```{r}
+describe(na.omit(ema$anx)) # m = 2.87 SD = 1.39
+describe(na.omit(ema$guilt)) # m = 2.99, SD = 1.45
+describe(na.omit(ema$avoidemo)) # m = 2.99, SD = 1.60
+describe(na.omit(ema$physuncomfort)) # m = 2.82, SD = 1.58
+
+#### ICCs ####
+ICC1.lme(avoid_lead, unique_id, data=mlmdat) # 0.65
+ICC1.lme(anx_lead, unique_id, data=mlmdat) # 0.54
+ICC1.lme(guilt_lead, unique_id, data=mlmdat) # 0.53
+ICC1.lme(phys_lead, unique_id, data=mlmdat) # 0.65
+```
+
+# time eat
+```{r}
+ema = ema[which(ema$beep<5),] # remove empty rows added btwn days
+dim(ema) # 10566 obs
+
+# time eaten
+str(ema$eatyn) # int make factor
+ema$eatyn <- factor(ema$eatyn)
+table(ema$eatyn, useNA = "ifany")
+round(prop.table(table(ema$eatyn, useNA = "ifany"))*100,2)
+# no = 1540 (14.58%), yes = 4581 (43.36%), NA 4445 (42.07%)
+
+str(ema$timesinceat) # integer
+round(mean(is.na(ema$timesinceat))*100,2) # 44.04
+describe(ema$timesinceat, na.rm = TRUE) # 199.07 (3.31 hrs), sd = 253.46 (4 hours) min = 0, max 1000 (over 16 hours)
+```
