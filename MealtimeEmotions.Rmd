@@ -476,94 +476,64 @@ plot(phys3_noAR1)
 ```
 
 ## Phys Emotions
-### phys to anx
+### emo to phys
 ```{r}
-anx_phys = lme(anx_lead ~ 1 + anx + phys_state,
+emophyscomb = lme(phys_lead ~ 1 + physuncomfort + anx_state +guilt_state,
             random =~ 1|unique_id,
             data=dat,
             correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
-summary(anx_phys)
+summary(emophyscomb)
 
-### add level 2 ###
-anx_phys2 = lme(anx_lead ~ 1 + anx + phys_state+cent_phys,
+#### model 3: add level 2 effects ####
+emophyscomb2 = lme(phys_lead ~ 1 + physuncomfort + anx_state + cent_anx + guilt_state+cent_guilt,
+            random =~ 1|unique_id,
+            data=dat,
+            #correlation= corCAR1(form=~beepcont),
+            na.action = na.exclude)
+summary(emophyscomb2)
+intervals(emophyscomb2)
+
+#### model 4: add random slopes for state variables ####
+emophyscomb3 = lme(phys_lead ~ 1 + physuncomfort + anx_state + cent_anx+ guilt_state+cent_guilt,
+            random =~ 1 + anx_state+guilt_state|unique_id,
+            data=dat,
+            #correlation= corCAR1(form=~beepcont),
+            na.action = na.exclude)
+summary(emophyscomb3)
+intervals(emophyscomb3)
+
+qqnorm(residuals(emophyscomb2))
+qqnorm(emophyscomb2, ~ranef(., level=1))
+plot(emophyscomb2)
+```
+
+### phys to anx
+```{r}
+summary(anx_phys2)
+anx_phys2 = lme(anx_lead ~ 1 + anx + phys_state,
             random =~ 1|unique_id,
             data=dat,
             correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(anx_phys2)
-intervals(anx_phys2) # NPD
+intervals(anx_phys2)
 
+### add level 2 ###
 anx_phys2_noAR1 = lme(anx_lead ~ 1 + anx + phys_state+cent_phys,
             random =~ 1|unique_id,
             data=dat,
             #correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(anx_phys2_noAR1)
-intervals(anx_phys2_noAR1) 
+intervals(anx_phys2_noAR1)
 
 anova(anx_phys2, anx_phys2_noAR1)
 
-### add random slopes ###
-# anx_phys3 = lme(anx_lead ~ 1 + anx + phys_state+cent_phys,
-#             random =~ 1 + phys_state|unique_id,
-#             data=dat,
-#             correlation= corCAR1(form=~beepcont),
-#             na.action = na.exclude)
-# summary(anx_phys3)
-# intervals(anx_phys3)
 
 qqnorm(residuals(anx_phys2_noAR1))
 qqnorm(anx_phys2_noAR1, ~ranef(., level=1))
 plot(anx_phys2_noAR1)
-```
-
-### anx to phys
-```{r}
-phys_anx = lme(phys_lead ~ 1 + physuncomfort + anx_state,
-            random =~ 1|unique_id,
-            data=dat,
-            correlation= corCAR1(form=~beepcont),
-            na.action = na.exclude)
-summary(phys_anx)
-
-### add level 2 ###
-phys_anx2 = lme(phys_lead ~ 1 + physuncomfort + anx_state+cent_anx,
-            random =~ 1|unique_id,
-            data=dat,
-            correlation= corCAR1(form=~beepcont),
-            na.action = na.exclude)
-summary(phys_anx2)
-intervals(phys_anx2)
-
-phys_anx2_noAR1 = lme(phys_lead ~ 1 + physuncomfort + anx_state+cent_anx,
-            random =~ 1|unique_id,
-            data=dat,
-            #correlation= corCAR1(form=~beepcont),
-            na.action = na.exclude)
-summary(phys_anx2_noAR1)
-intervals(phys_anx2_noAR1)
-
-### add random slopes ###
-# phys_anx3 = lme(phys_lead ~ 1 + physuncomfort + anx_state+cent_anx,
-#             random =~ 1 + anx_state|unique_id,
-#             data=dat,
-#             correlation= corCAR1(form=~beepcont),
-#             na.action = na.exclude)
-# summary(phys_anx3)
-# intervals(phys_anx3) # NPD go back to 2
-# anova(anx_phys2, anx_phys3)
-
-## effect size
-lme.dscore(phys_anx3, dat, "nlme")
-
-
-## pseudo R squared
-r2mlm(phys_anx3, bargraph = TRUE)
-
-qqnorm(residuals(phys_anx2))
-qqnorm(phys_anx2, ~ranef(., level=1))
-plot(phys_anx2)
 ```
 
 ### phys to guilt
@@ -616,58 +586,17 @@ qqnorm(guilt_phys2_noAR1, ~ranef(., level=1))
 plot(guilt_phys2_noAR1)
 ```
 
-### guilt to phys
-```{r}
-phys_guilt = lme(phys_lead ~ 1 + physuncomfort + guilt_state,
-            random =~ 1|unique_id,
-            data=dat,
-            correlation= corCAR1(form=~beepcont),
-            na.action = na.exclude)
-summary(phys_guilt)
-
-### add level 2 ###
-phys_guilt2 = lme(phys_lead ~ 1 + physuncomfort + guilt_state+cent_guilt,
-            random =~ 1|unique_id,
-            data=dat,
-            correlation= corCAR1(form=~beepcont),
-            na.action = na.exclude)
-summary(phys_guilt2)
-intervals(phys_guilt2)
-
-phys_guilt2_noAR1 = lme(phys_lead ~ 1 + physuncomfort + guilt_state+cent_guilt,
-            random =~ 1|unique_id,
-            data=dat,
-            #correlation= corCAR1(form=~beepcont),
-            na.action = na.exclude)
-summary(phys_guilt2_noAR1)
-intervals(phys_guilt2_noAR1)
-anova(phys_guilt2, phys_guilt2_noAR1)
-
-### add random slopes ###
-# phys_guilt3 = lme(phys_lead ~ 1 + physuncomfort + guilt_state+cent_guilt,
-#             random =~ 1 + guilt_state|unique_id,
-#             data=dat,
-#             correlation= corCAR1(form=~beepcont),
-#             na.action = na.exclude)
-# summary(phys_guilt3)
-# intervals(phys_guilt3) # NPD go back to 2
-# # anova(anx_phys2, anx_phys3)
-# 
-# ## effect size
-# lme.dscore(phys_anx2, dat, "nlme")
-# 
-# 
-# ## pseudo R squared
-# r2mlm(phys_anx2, bargraph = TRUE)
-
-qqnorm(phys_guilt2_noAR1)
-qqnorm(phys_guilt2_noAR1, ~ranef(., level=1))
-plot(phys_guilt2_noAR1)
-```
 
 
 # RESULTS SUMMARY
 ## H1a summary
+
+avoid3 = lme(avoid_lead ~ 1 + avoidemo + anx_state + anx_trait,
+            random =~ 1|unique_id,
+            data=dat,
+            correlation= corCAR1(form=~beepcont),
+            na.action = na.exclude)
+            
 ```{r}
 summary(avoid3)
 intervals(avoid3)
@@ -676,6 +605,11 @@ r2mlm(avoid3)
 ```
 
 ## H1b summary
+anx3 = lme(anx_lead ~ 1 + anx + avoid_state + cent_avoid,
+            random =~ 1|unique_id,
+            data=dat,
+            correlation= corCAR1(form=~beepcont),
+            na.action = na.exclude)
 ```{r}
 summary(anx3)
 intervals(anx3)
@@ -684,6 +618,13 @@ r2mlm(anx3)
 ```
 
 ## H2a summary
+
+avoidcomb2 = lme(avoid_lead ~ 1 + avoidemo + anx_state + cent_anx + guilt_state+cent_guilt,
+            random =~ 1|unique_id,
+            data=dat,
+            correlation= corCAR1(form=~beepcont),
+            na.action = na.exclude)
+            
 ```{r}
 summary(avoidcomb2)
 intervals(avoidcomb2)
@@ -692,6 +633,12 @@ r2mlm(avoidcomb2)
 ```
 
 ## H2b summary
+
+guilt4 = lme(guilt_lead ~ 1 + guilt + avoid_state + cent_avoid,
+            random =~ 1 + avoid_state|unique_id,
+            data=dat,
+            na.action = na.exclude)
+            
 ```{r}
 summary(guilt4)
 intervals(guilt4)
@@ -700,6 +647,13 @@ r2mlm(guilt4)
 ```
 
 ## H3a summary (no AR1)
+
+avoid_phys2_noAR1 = lme(avoid_lead ~ 1 + avoidemo + phys_state+cent_phys,
+            random =~ 1|unique_id,
+            data=dat,
+            #correlation= corCAR1(form=~beepcont),
+            na.action = na.exclude)
+            
 ```{r}
 summary(avoid_phys2_noAR1)
 intervals(avoid_phys2_noAR1)
@@ -708,6 +662,13 @@ r2mlm(avoid_phys2_noAR1)
 ```
 
 ## H3b summary (no AR1)
+
+phys3_noAR1 = lme(phys_lead ~ 1 + physuncomfort + avoid_state + cent_avoid,
+            random =~ 1|unique_id,
+            data=dat,
+            #correlation= corCAR1(form=~beepcont),
+            na.action = na.exclude)
+            
 ```{r}
 summary(phys3_noAR1)
 intervals(phys3_noAR1)
@@ -715,8 +676,30 @@ lme.dscore(phys3_noAR1, dat, "nlme")
 r2mlm(phys3_noAR1)
 ```
 
-## H4 pt 1
+## H4
+### emo to phys
+
+emophyscomb3 = lme(phys_lead ~ 1 + physuncomfort + anx_state + cent_anx+ guilt_state+cent_guilt,
+            random =~ 1 + anx_state+guilt_state|unique_id,
+            data=dat,
+            #correlation= corCAR1(form=~beepcont),
+            na.action = na.exclude)
+            
+```{r}
+summary(emophyscomb3)
+intervals(emophyscomb3)
+lme.dscore(emophyscomb3, dat, "nlme")
+r2mlm(emophyscomb3)
+```
+
 ### phys to anx
+
+anx_phys2_noAR1 = lme(anx_lead ~ 1 + anx + phys_state+cent_phys,
+            random =~ 1|unique_id,
+            data=dat,
+            #correlation= corCAR1(form=~beepcont),
+            na.action = na.exclude)
+            
 ```{r}
 summary(anx_phys2_noAR1)
 intervals(anx_phys2_noAR1)
@@ -724,15 +707,14 @@ lme.dscore(anx_phys2_noAR1, dat, "nlme")
 r2mlm(anx_phys2_noAR1)
 ```
 
-### anx to phys
-```{r}
-summary(phys_anx2_noAR1)
-intervals(phys_anx2_noAR1)
-lme.dscore(phys_anx2_noAR1, dat, "nlme")
-r2mlm(phys_anx2_noAR1)
-```
-
 ### phys to guilt
+
+guilt_phys2_noAR1 = lme(guilt_lead ~ 1 + guilt + phys_state+cent_phys,
+            random =~ 1|unique_id,
+            data=dat,
+            #correlation= corCAR1(form=~beepcont),
+            na.action = na.exclude)
+            
 ```{r}
 summary(guilt_phys2_noAR1)
 intervals(guilt_phys2_noAR1)
@@ -740,13 +722,6 @@ lme.dscore(guilt_phys2_noAR1, dat, "nlme")
 r2mlm(guilt_phys2_noAR1)
 ```
 
-### guilt to phys
-```{r}
-summary(phys_guilt2_noAR1)
-intervals(phys_guilt2_noAR1)
-lme.dscore(phys_guilt2_noAR1, dat, "nlme")
-r2mlm(phys_guilt2_noAR1)
-```
 
 # corrs
 ```{r}
