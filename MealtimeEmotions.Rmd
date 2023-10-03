@@ -1,18 +1,13 @@
 ---
-title: "MealtimeEmotions"
+title: "mealtime emotions"
 output: html_document
-date: "2023-01-16"
+date: "2023-10-03"
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
-
-# libs and dat
+# libs dat
 ```{r}
-# clear workspace
-# rm(list=ls())
-
+devtools::install_github("rpsychologist/powerlmm")
+library(powerlmm)
 if (!require("tidyverse")) {install.packages("tidyverse"); require("tidyverse")} # tidy
 if (!require("psych")) {install.packages("psych"); require("psych")} # descriptives
 if (!require("lme4")) {install.packages("lme4"); require("lme4")} # fits mixed models
@@ -21,55 +16,200 @@ if (!require("lmerTest")) {install.packages("lmerTest"); require("lmerTest")} # 
 if (!require("performance")) {install.packages("performance"); require("performance")} # computes ICC
 if (!require("DataCombine")) {install.packages("DataCombine"); require("DataCombine")} # leadingDataCombine
 # library(plyr)
-library(sjPlot)
+# library(sjPlot)
 library(multcomp)
 library(psychometric)
-library(EMAtools)
+# library(EMAtools)
 library(r2mlm)
 
-dat_import <- read.csv("dat.csv", header = TRUE, sep=",")
-dat <- dat_import
-length(unique(dat$unique_id)) # 108
+dat_import <- read.csv("mlmdat_statetraitcent.csv", stringsAsFactors = TRUE)
+dat=dat_import
+dh3survey <- read.csv("DH3surveydat_cusack.csv", stringsAsFactors = TRUE)
+dh3diagnoses <- read.csv("DH3diagnosesforR.csv", stringsAsFactors = TRUE)
+
+dh3survey <- dh3survey[which(dh3survey$unique_id %in% unique(dat$unique_id)),]
+dh3diagnoses <- dh3diagnoses[which(dh3diagnoses$ID_Number %in% unique(dat$unique_id)),]
 ```
 
-# data management
+# functions
 ```{r}
-DH3_imeans <- plyr::ddply(dat, "unique_id", summarize,
-                    anx_trait = mean(anx, na.rm = TRUE),
-                    guilt_trait = mean(guilt, na.rm = TRUE),
-                    avoidemo_trait = mean(avoidemo, na.rm = TRUE),
-                    physuncomfort_trait = mean(physuncomfort, na.rm = TRUE))
+#### effect size ####
+lme.dscore<-function(mod,data,type){
+  if (type=="lme4") {
+    mod1<-lmerTest::lmer(mod,data=data)
+    eff<-cbind(summary(mod1)$coefficients[,4],summary(mod1)$coefficients[,3])
+  }
 
-# describe(DH3_imeans) 
-dat <- merge(dat, DH3_imeans, by="unique_id") # merge the EMA trait items into the self-report data
-# head(dat)
+  if (type=="nlme") {
+    eff=cbind(summary(mod)$tTable[,4],summary(mod)$fixDF$terms)
+  }
 
-####### center trait vars to compare between persons later #######
-dat$cent_anx <- c(scale(dat$anx_trait,center=TRUE,scale=FALSE))
-dat$cent_guilt <- c(scale(dat$guilt_trait,center=TRUE,scale=FALSE))
-dat$cent_avoid <- c(scale(dat$avoidemo_trait,center=TRUE,scale=FALSE))
-dat$cent_phys <- c(scale(dat$physuncomfort_trait,center=TRUE,scale=FALSE))
-# describe(dat)
+  colnames(eff)<-c("t","df")
+  eff<-as.data.frame(eff)
+  eff$d<-(2*eff$t)/sqrt(eff$df)
+  eff<-eff[-1,]
+  return(eff)
+}
 
-####### create state vars #######
-dat$anx_state <- dat$anx - dat$anx_trait
-dat$guilt_state <- dat$guilt - dat$guilt_trait
-dat$avoid_state <- dat$avoidemo - dat$avoidemo_trait
-dat$phys_state <- dat$physuncomfort - dat$physuncomfort_trait
-# head(dat)
+samplesize_mixed <- function(eff.size, df.n = NULL, power = .8, sig.level = .05, k, n, icc = 0.05) {
+  if (!requireNamespace("pwr", quietly = TRUE)) {
+    stop("Package `pwr` needed for this function to work. Please install it.", call. = FALSE)
+  }
 
-####### lead #######
-dat <- slide(data=dat, Var="anx", TimeVar="beep", GroupVar="unique_id", NewVar="anx_lead", slideBy=1)
-dat <- slide(data=dat, Var="guilt", TimeVar="beep", GroupVar="unique_id", NewVar="guilt_lead", slideBy=1)
-dat <- slide(data=dat, Var="avoidemo", TimeVar="beep", GroupVar="unique_id", NewVar="avoid_lead", slideBy=1)
-dat <- slide(data=dat, Var="physuncomfort", TimeVar="beep", GroupVar= "unique_id", NewVar="phys_lead", slideBy=1)
+  # compute sample size for standard design
+  if (is.null(df.n))
+    # if we have no degrees of freedom specified, use t-test
+    obs <- 2 * pwr::pwr.t.test(d = eff.size, sig.level = sig.level, power = power)$n
+  else
+    # we have df, so power-calc for linear models
+    obs <- pwr::pwr.f2.test(u = df.n, f2 = eff.size, sig.level = sig.level, power = power)$v + df.n + 1
 
-# write.csv(dat, "mlmdat_statetraitcent.csv", row.names = FALSE)
-rm(DH3_imeans)
+  # if we have no information on the number of observations per cluster,
+  # compute this number now
+  if (missing(n) || is.null(n)) {
+    n <- (obs * (1 - icc)) / (k - (obs * icc))
+    if (n < 1) {
+      warning("Minimum required number of subjects per cluster is negative and was adjusted to be positive. You may reduce the requirements for the multi-level structure (i.e. reduce `k` or `icc`), or you can increase the effect-size.", call. = FALSE)
+      n <- 1
+    }
+  }
+
+  # adjust standard design by design effect
+  total.n <- obs * design_effect(n = n, icc = icc)
+
+
+  # sample size for each group and total n
+  smpsz <- list(round(total.n / k), round(total.n))
+
+  # name list
+  names(smpsz) <- c("Subjects per Cluster", "Total Sample Size")
+  smpsz
+}
+
+
+#' @rdname samplesize_mixed
+#' @export
+smpsize_lmm <- samplesize_mixed
+
+design_effect <- function(n, icc = 0.05) {
+  1 + (n - 1) * icc
+}
+
+lme.dscore<-function(mod,data,type){
+  if (type=="lme4") {
+    mod1<-lmerTest::lmer(mod,data=data)
+    eff<-cbind(summary(mod1)$coefficients[,4],summary(mod1)$coefficients[,3])
+  }
+
+  if (type=="nlme") {
+    eff=cbind(summary(mod)$tTable[,4],summary(mod)$fixDF$terms)
+  }
+
+  colnames(eff)<-c("t","df")
+  eff<-as.data.frame(eff)
+  eff$d<-(2*eff$t)/sqrt(eff$df)
+  eff<-eff[-1,]
+  return(eff)
+}
+
+#### power curve ####
+ema.powercurve=function(NumbPart,NumbResp,days,respday,Est_ICC=.05,COL.8="red",COL.5="blue",COL.2="green"){
+
+
+  if(!missing(days) & !missing(respday)) {
+    NumbResp<-days*respday
+  } else {
+    NumbResp<-NumbResp
+  }
+
+  ### initate matricies ####
+  eff8a<-NULL;eff2a<-NULL;eff5a<-NULL
+
+  #### functions for power curves ####
+
+  for (PWR in c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.95,0.99)){
+    eff8<-(smpsize_lmm(eff.size = 0.8, power = PWR, sig.level = 0.05, k = NumbPart, icc = Est_ICC,n=NumbResp))
+    eff8a<-as.data.frame(rbind(eff8a,eff8$`Subjects per Cluster`))
+  }
+
+  for (PWR in c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.95,0.99)){
+    eff5<-(smpsize_lmm(eff.size = 0.5, power = PWR, sig.level = 0.05, k = NumbPart, icc = Est_ICC,n=NumbResp))
+    eff5a<-as.data.frame(rbind(eff5a,eff5$`Subjects per Cluster`))
+  }
+
+
+  for (PWR in c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.95,0.99)){
+    eff2<-(smpsize_lmm(eff.size = 0.2, power = PWR, sig.level = 0.05, k = NumbPart, icc = Est_ICC,n=NumbResp))
+    eff2a<-as.data.frame(rbind(eff2a,eff2$`Subjects per Cluster`))
+  }
+
+
+  for (Add99 in c(10,20,30,40,50,60,70,75,80,85,90,95,100,105,110,115,120,125,130,140,150,160,170)){
+    eff2a<-as.data.frame(rbind(eff2a,(eff2$`Subjects per Cluster`+Add99)))
+    eff5a<-as.data.frame(rbind(eff5a,(eff5$`Subjects per Cluster`+Add99)))
+    eff8a<-as.data.frame(rbind(eff8a,(eff8$`Subjects per Cluster`+Add99)))
+  }
+
+  ### merging curves ###
+  power<-rbind(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.95,0.99,0.99,0.99,0.99,0.99,0.99,0.99,0.99,0.99,0.99,0.99,0.99,0.99,0.99,0.99,0.99,0.99,0.99,0.99,0.99,0.99,0.99,0.99,0.99)
+
+  ### creating response rate lines
+
+
+  NumbRespColumn<-cbind(rep(c((NumbResp*.50),(NumbResp*.75),(NumbResp)),each=34))
+
+  LabResp<-cbind(rep(c("50%","75%","100%"),each=34))
+
+  comp_final<-as.data.frame(cbind((rbind(power,power,power)),NumbRespColumn,LabResp))
+  colnames(comp_final)<-c("power","NumbRespColumn","Response_Rate")
+
+
+  lg<-data.frame(cbind(power,eff8a,"Large (d=0.8)"));colnames(lg)<-c("Power","Resp","Effect_Size")
+  md<-data.frame(cbind(power,eff5a,"Medium (d=0.5)"));colnames(md)<-c("Power","Resp","Effect_Size")
+  sm<-data.frame(cbind(power,eff2a,"Small (d=0.2)"));colnames(sm)<-c("Power","Resp","Effect_Size")
+
+  eff_final<-rbind(lg,md,sm)
+
+
+
+  #### create ggplot ###
+
+  xlab_chart <- paste("Responses per participant (n =",NumbPart,"participants)" )
+
+  #  ggplot2::scale_x_continuous(limits = c(0,(round((NumbResp+40),-1))),breaks =seq(0, (round(NumbResp+40,-1)), by=20))+
+  #round_any(NumbResp, 10, f = ceiling)
+
+  if(NumbResp<=10) {Figure_X_Limit<-10}
+  if (NumbResp>10 & NumbResp<=15) {Figure_X_Limit<-15}
+  if (NumbResp>15 & NumbResp<=20) {Figure_X_Limit<-20}
+  if(NumbResp>20) {Figure_X_Limit<-(plyr::round_any(NumbResp, 10, f = ceiling)+10)}
+
+  if(max(eff_final[(eff_final$Resp<NumbResp & eff_final$Effect_Size=="Large (d=0.8)"),]$Power)==0.99) {
+    eff_final<-rbind(eff_final,data.frame(Power=0.99,Resp=NumbResp,Effect_Size="Large (d=0.8)"))}
+
+  if(max(eff_final[(eff_final$Resp<NumbResp & eff_final$Effect_Size=="Medium (d=0.5)"),]$Power)==0.99) {
+    eff_final<-rbind(eff_final,data.frame(Power=0.99,Resp=NumbResp,Effect_Size="Medium (d=0.5)"))}
+
+
+
+  PowerPlot1<-ggplot2::ggplot()+ ggplot2::geom_line(ggplot2::aes(x = Resp,y = Power,color=Effect_Size),size=1, data=eff_final[eff_final$Resp<=NumbResp,])+
+    ggplot2::xlab(xlab_chart) +
+    ggplot2::ylab("Power (1-beta)") +
+    ggplot2::scale_y_continuous(breaks=c(0,0.2,0.4,0.6,0.8,1.00), limits=c(0.1,1.00))+
+    ggplot2::geom_vline(xintercept=(NumbResp*.50),color="grey65", linetype = 3)+
+    ggplot2::geom_vline(xintercept=(NumbResp*.75),color="grey65", linetype = 2)+
+    ggplot2::scale_x_continuous(limits = c(0,Figure_X_Limit))+
+    ggplot2::geom_vline(xintercept=(NumbResp),color="grey65", linetype = 1)+
+    ggplot2::geom_line(ggplot2::aes(x = as.numeric(NumbRespColumn), y = as.numeric(power), linetype=Response_Rate), data=comp_final,color="grey65")+
+    ggplot2::theme_classic() + ggplot2::scale_linetype(name="Completion rate") +
+    ggplot2::scale_color_manual(name="Effect Size",values=c(COL.8,COL.5,COL.2))
+  return(PowerPlot1)
+}
 ```
 
-# anxiety-avoidance cycle
-## anx to avoid
+# Model Construction
+## Anxiety-Avoidance cycle
+### H1a: anx to avoid
 ```{r}
 #### ICC ####
 ICC1.lme(avoid_lead, unique_id, data=dat) # 0.65
@@ -78,47 +218,46 @@ ICC1.lme(avoid_lead, unique_id, data=dat) # 0.65
 avoid1 = lme(avoid_lead ~ 1,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(avoid1)
 
-#### model 2: add level 1 effects of state variables and emotional avoidance at the previous time point (level 1 = observation level) ####
+#### model 2: add level 1 effects of state variables and emotional avoidance at the previous time point ####
 avoid2 = lme(avoid_lead ~ 1 + avoidemo + anx_state,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(avoid2)
+intervals(avoid2)
+anova(avoid1, avoid2)
 
 #### model 3: add level 2 effects ####
-avoid3 = lme(avoid_lead ~ 1 + avoidemo + anx_state + cent_anx,
+avoid3 = lme(avoid_lead ~ 1 + avoidemo + anx_state + anx_trait,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(avoid3)
 intervals(avoid3)
+anova(avoid2, avoid3)
 
-#### model 4: add random slopes for state variables ####
-avoid4 = lme(avoid_lead ~ 1 + avoidemo + anx_state + cent_anx,
-            random =~ 1 + anx_state|unique_id,
-            data=dat,
-            na.action = na.exclude)
-summary(avoid4)
-intervals(avoid4)
+#### model 4: add random slopes for state var ####
+# avoid4 = lme(avoid_lead ~ 1 + avoidemo + anx_state + cent_anx,
+#             random =~ 1 + anx_state|unique_id,
+#             data=dat,
+#             correlation= corCAR1(form=~beepcont),
+#             na.action = na.exclude)
+# summary(avoid4)
+# intervals(avoid4) # NPD
 # anova(avoid3, avoid4)
 
-## effect size
-lme.dscore(avoid4, dat, "nlme")
-
-## pseudo R squared
-r2mlm(avoid4, bargraph = TRUE)
-
-# get SE for random effects
-exp(attr(avoid4$apVar, "Pars"))^2
-
-qqnorm(avoid4, ~ranef(., level=1))
-plot(avoid4)
+qqnorm(residuals(avoid3))
+qqnorm(avoid3, ~ranef(., level=1))
+plot(avoid3)
 ```
 
-### avoid to anx
+### H1b: avoid to anx
 ```{r}
 #### ICC ####
 ICC1.lme(anx_lead, unique_id, data=dat) # 0.54
@@ -127,92 +266,90 @@ ICC1.lme(anx_lead, unique_id, data=dat) # 0.54
 anx1 = lme(anx_lead ~ 1,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(anx1)
 
-#### model 2: add level 1 effects of state variables and emotional avoidance at the previous time point (level 1 = observation level) ####
+#### model 2: add level 1 effects of state variables and emotional avoidance at the previous time point ####
 anx2 = lme(anx_lead ~ 1 + anx + avoid_state,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(anx2)
+anova(anx1, anx2)
 
 #### model 3: add level 2 effects ####
 anx3 = lme(anx_lead ~ 1 + anx + avoid_state + cent_avoid,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(anx3)
 intervals(anx3)
 exp(attr(avoid3$apVar, "Pars"))^2
+anova.lme(anx2, anx3)
 
-#### model 4: add random slopes for state variables ####
-anx4 = lme(anx_lead ~ 1 + anx + avoid_state + cent_avoid,
-            random =~ 1 + avoid_state|unique_id,
-            data=dat,
-            na.action = na.exclude)
-summary(anx4)
-intervals(anx4) # NPD too complex go back to anx 3
+#### model 4: add random slopes for state var ####
+# anx4 = lme(anx_lead ~ 1 + anx + avoid_state + cent_avoid,
+#             random =~ 1 + avoid_state|unique_id,
+#             data=dat,
+#             na.action = na.exclude)
+# summary(anx4)
+# intervals(anx4) # NPD too complex go back to anx 3
 
-## effect size
-lme.dscore(anx3, dat, "nlme")
-
-
-## pseudo R squared
-r2mlm(anx3, bargraph = TRUE)
-
+qqnorm(residuals(anx3))
 qqnorm(anx3, ~ranef(., level=1))
 plot(anx3)
 ```
 
-## anx and guilt to emo avoid
+## Anx guilt avoid
+### H2a: anx guilt to avoid
 ```{r}
-#### model 2: add level 1 effects of state variables and emotional avoidance at the previous time point (level 1 = observation level) ####
 avoidcomb = lme(avoid_lead ~ 1 + avoidemo + anx_state +guilt_state,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(avoidcomb)
 
-#### model 3: add level 2 effects ####
+#### model 2: add level 1 effects ####
 avoidcomb2 = lme(avoid_lead ~ 1 + avoidemo + anx_state + cent_anx + guilt_state+cent_guilt,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(avoidcomb2)
 intervals(avoidcomb2)
 
-#### model 4: add random slopes for state variables ####
-avoidcomb3 = lme(avoid_lead ~ 1 + avoidemo + anx_state + cent_anx+ guilt_state+cent_guilt,
-            random =~ 1 + anx_state+guilt_state|unique_id,
-            data=dat,
-            na.action = na.exclude)
-summary(avoidcomb3)
-intervals(avoidcomb3)
-# anova(avoidcomb2, avoidcomb3)
+#### model 3: add random slopes for state var ####
+# avoidcomb3 = lme(avoid_lead ~ 1 + avoidemo + anx_state + cent_anx+ guilt_state+cent_guilt,
+#             random =~ 1 + anx_state+guilt_state|unique_id,
+#             data=dat,
+#             correlation= corCAR1(form=~beepcont),
+#             na.action = na.exclude)
+# summary(avoidcomb3)
+# intervals(avoidcomb3) # NPD
 
-## effect size
-lme.dscore(avoidcomb3, dat, "nlme")
-
-
-## pseudo R squared
-r2mlm(avoidcomb3, bargraph = TRUE)
-qqnorm(avoidcomb3, ~ranef(., level=1))
-plot(avoidcomb3)
+qqnorm(residuals(avoidcomb2))
+qqnorm(avoidcomb2, ~ranef(., level=1))
+plot(avoidcomb2)
 ```
 
-### vice versa
+### H2b: avoid to guilt
 ```{r}
 guilt1 = lme(guilt_lead ~ 1,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(guilt1)
 
-#### model 2: add level 1 effects of state variables and emotional avoidance at the previous time point (level 1 = observation level) ####
+#### model 2: add level 1 effects of state variables and guilt at the previous time point  ####
 guilt2 = lme(guilt_lead ~ 1 + guilt + avoid_state,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(guilt2)
 
@@ -220,81 +357,89 @@ summary(guilt2)
 guilt3 = lme(guilt_lead ~ 1 + guilt + avoid_state + cent_avoid,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(guilt3)
 intervals(guilt3)
+anova(guilt2,guilt3)
 
-#### model 4: add random slopes for state variables ####
+#### model 4: add random slopes for state var ####
 guilt4 = lme(guilt_lead ~ 1 + guilt + avoid_state + cent_avoid,
             random =~ 1 + avoid_state|unique_id,
             data=dat,
             na.action = na.exclude)
 summary(guilt4)
 intervals(guilt4)
-anova(guilt3, guilt4)
+anova(guilt3,guilt4)
 
-## effect size
-lme.dscore(guilt4, dat, "nlme")
-
-## pseudo R squared
-r2mlm(guilt4, bargraph = TRUE)
-
+qqnorm(residuals(guilt4))
 qqnorm(guilt4, ~ranef(., level=1))
 plot(guilt4)
 ```
 
-# physical pathways to avoidance
+## Phys and avoid
+### H3a: phys to avoid
 ```{r}
-#### model 2: add level 1 effects of state variables and emotional avoidance at the previous time point (level 1 = observation level) ####
 avoid_phys = lme(avoid_lead ~ 1 + avoidemo + phys_state,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(avoid_phys)
+intervals(avoid_phys)
 
 ### add level 2 ###
 avoid_phys2 = lme(avoid_lead ~ 1 + avoidemo + phys_state+cent_phys,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(avoid_phys2)
 intervals(avoid_phys2)
 
-### add random slopes ###
-avoid_phys3 = lme(avoid_lead ~ 1 + avoidemo + phys_state+cent_phys,
-            random =~ 1 + phys_state|unique_id,
+avoid_phys2_noAR1 = lme(avoid_lead ~ 1 + avoidemo + phys_state+cent_phys,
+            random =~ 1|unique_id,
             data=dat,
+            #correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
+summary(avoid_phys2_noAR1)
+intervals(avoid_phys2_noAR1)
+
+anova(avoid_phys2, avoid_phys2_noAR1)
+
+### add random slopes ###
+# avoid_phys3 = lme(avoid_lead ~ 1 + avoidemo + phys_state+cent_phys,
+#             random =~ 1 + phys_state|unique_id,
+#             data=dat,
+#             correlation= corCAR1(form=~beepcont),
+#             na.action = na.exclude)
 # summary(avoid_phys3)
 # intervals(avoid_phys3)
 # anova(avoid_phys2, avoid_phys3)
 
-## effect size
-lme.dscore(avoid_phys2, dat, "nlme")
-
-## pseudo R squared
-r2mlm(avoid_phys2, bargraph = TRUE)
-qqnorm(avoid_phys2, ~ranef(., level=1))
-plot(avoid_phys2)
+qqnorm(residuals(avoid_phys2_noAR1))
+qqnorm(avoid_phys2_noAR1, ~ranef(., level=1))
+plot(avoid_phys2_noAR1)
 ```
 
-## vice versa
+### H3b: avoid to phys
 ```{r}
 #### ICC ####
 ICC1.lme(phys_lead, unique_id, data=dat) # 0.65
-ICC1.lme(guilt_lead, unique_id, data=dat) # 0.53
 
 #### intercept only model ####
 phys1 = lme(phys_lead ~ 1,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(phys1)
 
-#### model 2: add level 1 effects of state variables and emotional avoidance at the previous time point (level 1 = observation level) ####
+#### model 2: add level 1 effects of state var ####
 phys2 = lme(phys_lead ~ 1 + physuncomfort + avoid_state,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(phys2)
 
@@ -302,39 +447,41 @@ summary(phys2)
 phys3 = lme(phys_lead ~ 1 + physuncomfort + avoid_state + cent_avoid,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(phys3)
-intervals(phys3)
+intervals(phys3, which = "fixed")
+
+phys3_noAR1 = lme(phys_lead ~ 1 + physuncomfort + avoid_state + cent_avoid,
+            random =~ 1|unique_id,
+            data=dat,
+            #correlation= corCAR1(form=~beepcont),
+            na.action = na.exclude)
+summary(phys3)
+intervals(phys3_noAR1)
+anova(phys3, phys3_noAR1)
 
 #### model 4: add random slopes for state variables ####
-phys4 = lme(phys_lead ~ 1 + physuncomfort + avoid_state + cent_avoid,
-            random =~ 1 + avoid_state|unique_id,
-            data=dat,
-            na.action = na.exclude)
-summary(phys4)
-intervals(phys4) # NPD too complex go back to phys3 
-anova(phys3, phys4)
+# phys4 = lme(phys_lead ~ 1 + physuncomfort + avoid_state + cent_avoid,
+#             random =~ 1 + avoid_state|unique_id,
+#             data=dat,
+#             correlation= corCAR1(form=~beepcont),
+#             na.action = na.exclude)
+# summary(phys4)
+# intervals(phys4) # NPD too complex go back to phys3 
 
-## effect size
-lme.dscore(phys3, dat, "nlme")
-
-
-## pseudo R squared
-r2mlm(phys3, bargraph = TRUE)
-
-qqnorm(phys3, ~ranef(., level=1))
-plot(phys3)
+qqnorm(residuals(phys3_noAR1))
+qqnorm(phys3_noAR1, ~ranef(., level=1))
+plot(phys3_noAR1)
 ```
 
-# emo to phys
-## phys to anx
+## Phys Emotions
+### phys to anx
 ```{r}
-# random intercept
-summary(anx1)
-
 anx_phys = lme(anx_lead ~ 1 + anx + phys_state,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(anx_phys)
 
@@ -342,38 +489,89 @@ summary(anx_phys)
 anx_phys2 = lme(anx_lead ~ 1 + anx + phys_state+cent_phys,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(anx_phys2)
-intervals(anx_phys2)
+intervals(anx_phys2) # NPD
+
+anx_phys2_noAR1 = lme(anx_lead ~ 1 + anx + phys_state+cent_phys,
+            random =~ 1|unique_id,
+            data=dat,
+            #correlation= corCAR1(form=~beepcont),
+            na.action = na.exclude)
+summary(anx_phys2_noAR1)
+intervals(anx_phys2_noAR1) 
+
+anova(anx_phys2, anx_phys2_noAR1)
 
 ### add random slopes ###
-anx_phys3 = lme(anx_lead ~ 1 + anx + phys_state+cent_phys,
-            random =~ 1 + phys_state|unique_id,
+# anx_phys3 = lme(anx_lead ~ 1 + anx + phys_state+cent_phys,
+#             random =~ 1 + phys_state|unique_id,
+#             data=dat,
+#             correlation= corCAR1(form=~beepcont),
+#             na.action = na.exclude)
+# summary(anx_phys3)
+# intervals(anx_phys3)
+
+qqnorm(residuals(anx_phys2_noAR1))
+qqnorm(anx_phys2_noAR1, ~ranef(., level=1))
+plot(anx_phys2_noAR1)
+```
+
+### anx to phys
+```{r}
+phys_anx = lme(phys_lead ~ 1 + physuncomfort + anx_state,
+            random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
-summary(anx_phys3)
-intervals(anx_phys3)
+summary(phys_anx)
+
+### add level 2 ###
+phys_anx2 = lme(phys_lead ~ 1 + physuncomfort + anx_state+cent_anx,
+            random =~ 1|unique_id,
+            data=dat,
+            correlation= corCAR1(form=~beepcont),
+            na.action = na.exclude)
+summary(phys_anx2)
+intervals(phys_anx2)
+
+phys_anx2_noAR1 = lme(phys_lead ~ 1 + physuncomfort + anx_state+cent_anx,
+            random =~ 1|unique_id,
+            data=dat,
+            #correlation= corCAR1(form=~beepcont),
+            na.action = na.exclude)
+summary(phys_anx2_noAR1)
+intervals(phys_anx2_noAR1)
+
+### add random slopes ###
+# phys_anx3 = lme(phys_lead ~ 1 + physuncomfort + anx_state+cent_anx,
+#             random =~ 1 + anx_state|unique_id,
+#             data=dat,
+#             correlation= corCAR1(form=~beepcont),
+#             na.action = na.exclude)
+# summary(phys_anx3)
+# intervals(phys_anx3) # NPD go back to 2
 # anova(anx_phys2, anx_phys3)
 
 ## effect size
-lme.dscore(anx_phys3, dat, "nlme")
+lme.dscore(phys_anx3, dat, "nlme")
 
 
 ## pseudo R squared
-r2mlm(anx_phys3, bargraph = TRUE)
+r2mlm(phys_anx3, bargraph = TRUE)
 
-qqnorm(anx_phys3, ~ranef(., level=1))
-plot(anx_phys3)
+qqnorm(residuals(phys_anx2))
+qqnorm(phys_anx2, ~ranef(., level=1))
+plot(phys_anx2)
 ```
 
-## phys to guilt
+### phys to guilt
 ```{r}
-# random intercept 
-summary(guilt1)
-
 guilt_phys = lme(guilt_lead ~ 1 + guilt + phys_state,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(guilt_phys)
 
@@ -381,14 +579,25 @@ summary(guilt_phys)
 guilt_phys2 = lme(guilt_lead ~ 1 + guilt + phys_state+cent_phys,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(guilt_phys2)
 intervals(guilt_phys2)
+
+guilt_phys2_noAR1 = lme(guilt_lead ~ 1 + guilt + phys_state+cent_phys,
+            random =~ 1|unique_id,
+            data=dat,
+            #correlation= corCAR1(form=~beepcont),
+            na.action = na.exclude)
+summary(guilt_phys2_noAR1)
+intervals(guilt_phys2_noAR1)
+anova(guilt_phys2, guilt_phys2_noAR1)
 
 ### add random slopes ###
 guilt_phys3 = lme(guilt_lead ~ 1 + guilt + phys_state+cent_phys,
             random =~ 1 + phys_state|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(guilt_phys3)
 intervals(guilt_phys3) 
@@ -402,46 +611,141 @@ lme.dscore(guilt_phys3, dat, "nlme")
 ## pseudo R squared
 r2mlm(guilt_phys2, bargraph = TRUE)
 
-qqnorm(guilt_phys2, ~ranef(., level=1))
-plot(guilt_phys2)
+qqnorm(residuals(guilt_phys2_noAR1))
+qqnorm(guilt_phys2_noAR1, ~ranef(., level=1))
+plot(guilt_phys2_noAR1)
 ```
 
-## anx guilt to phys
+### guilt to phys
 ```{r}
-emophyscomb = lme(phys_lead ~ 1 + physuncomfort + anx_state +guilt_state,
+phys_guilt = lme(phys_lead ~ 1 + physuncomfort + guilt_state,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
-summary(emophyscomb)
+summary(phys_guilt)
 
-#### model 3: add level 2 effects ####
-emophyscomb2 = lme(phys_lead ~ 1 + physuncomfort + anx_state + cent_anx + guilt_state+cent_guilt,
+### add level 2 ###
+phys_guilt2 = lme(phys_lead ~ 1 + physuncomfort + guilt_state+cent_guilt,
             random =~ 1|unique_id,
             data=dat,
+            correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
-summary(emophyscomb2)
-intervals(emophyscomb2)
+summary(phys_guilt2)
+intervals(phys_guilt2)
 
-#### model 4: add random slopes for state variables ####
-emophyscomb3 = lme(phys_lead ~ 1 + physuncomfort + anx_state + cent_anx+ guilt_state+cent_guilt,
-            random =~ 1 + anx_state+guilt_state|unique_id,
+phys_guilt2_noAR1 = lme(phys_lead ~ 1 + physuncomfort + guilt_state+cent_guilt,
+            random =~ 1|unique_id,
             data=dat,
+            #correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
-summary(emophyscomb3)
-intervals(emophyscomb3)
-# anova(emophyscomb2, emophyscomb3)
+summary(phys_guilt2_noAR1)
+intervals(phys_guilt2_noAR1)
+anova(phys_guilt2, phys_guilt2_noAR1)
+
+### add random slopes ###
+# phys_guilt3 = lme(phys_lead ~ 1 + physuncomfort + guilt_state+cent_guilt,
+#             random =~ 1 + guilt_state|unique_id,
+#             data=dat,
+#             correlation= corCAR1(form=~beepcont),
+#             na.action = na.exclude)
+# summary(phys_guilt3)
+# intervals(phys_guilt3) # NPD go back to 2
+# # anova(anx_phys2, anx_phys3)
+# 
+# ## effect size
+# lme.dscore(phys_anx2, dat, "nlme")
+# 
+# 
+# ## pseudo R squared
+# r2mlm(phys_anx2, bargraph = TRUE)
+
+qqnorm(phys_guilt2_noAR1)
+qqnorm(phys_guilt2_noAR1, ~ranef(., level=1))
+plot(phys_guilt2_noAR1)
+```
 
 
-## effect size
-lme.dscore(emophyscomb3, dat, "nlme")
+# RESULTS SUMMARY
+## H1a summary
+```{r}
+summary(avoid3)
+intervals(avoid3)
+lme.dscore(avoid3, dat, "nlme")
+r2mlm(avoid3)
+```
 
+## H1b summary
+```{r}
+summary(anx3)
+intervals(anx3)
+lme.dscore(anx3, dat, "nlme")
+r2mlm(anx3)
+```
 
-## pseudo R squared
-r2mlm(emophyscomb3, bargraph = TRUE)
+## H2a summary
+```{r}
+summary(avoidcomb2)
+intervals(avoidcomb2)
+lme.dscore(avoidcomb2, dat, "nlme")
+r2mlm(avoidcomb2)
+```
 
+## H2b summary
+```{r}
+summary(guilt4)
+intervals(guilt4)
+lme.dscore(guilt4, dat, "nlme")
+r2mlm(guilt4)
+```
 
-qqnorm(emophyscomb3, ~ranef(., level=1))
-plot(emophyscomb3)
+## H3a summary (no AR1)
+```{r}
+summary(avoid_phys2_noAR1)
+intervals(avoid_phys2_noAR1)
+lme.dscore(avoid_phys2_noAR1, dat, "nlme")
+r2mlm(avoid_phys2_noAR1)
+```
+
+## H3b summary (no AR1)
+```{r}
+summary(phys3_noAR1)
+intervals(phys3_noAR1)
+lme.dscore(phys3_noAR1, dat, "nlme")
+r2mlm(phys3_noAR1)
+```
+
+## H4 pt 1
+### phys to anx
+```{r}
+summary(anx_phys2_noAR1)
+intervals(anx_phys2_noAR1)
+lme.dscore(anx_phys2_noAR1, dat, "nlme")
+r2mlm(anx_phys2_noAR1)
+```
+
+### anx to phys
+```{r}
+summary(phys_anx2_noAR1)
+intervals(phys_anx2_noAR1)
+lme.dscore(phys_anx2_noAR1, dat, "nlme")
+r2mlm(phys_anx2_noAR1)
+```
+
+### phys to guilt
+```{r}
+summary(guilt_phys2_noAR1)
+intervals(guilt_phys2_noAR1)
+lme.dscore(guilt_phys2_noAR1, dat, "nlme")
+r2mlm(guilt_phys2_noAR1)
+```
+
+### guilt to phys
+```{r}
+summary(phys_guilt2_noAR1)
+intervals(phys_guilt2_noAR1)
+lme.dscore(phys_guilt2_noAR1, dat, "nlme")
+r2mlm(phys_guilt2_noAR1)
 ```
 
 # corrs
@@ -454,169 +758,198 @@ cors$r[c(1:4), c(1:4)]
 cors$p[c(1:4), c(1:4)]
 ```
 
-# network
-## preprocess
+# demos
+## gender
+4 men, 124 women, 1 not listed, 1 NA
 ```{r}
-library(mlVAR) # for estimating network
-library(qgraph) # for visualizing network
-
-net_dat <- dat[which(dat$beep<5),]
-
-net_dat <- net_dat %>% dplyr::rename(physdis=physuncomfort, anxiety=anx)
-
-dayvar = "day"
-beepvar = "beep"
-
-names.vars <- c("anxiety", "guilt", "physdis", "avoidemo")
-dir.create("./NetResultsJan2023")
-dir.create("./NetResultsJan2023/Figs")
+dim(survey_current)
+table(survey_current$gender, useNA = "ifany")
+# 4 men, 102 women, 1 not listed, 1 NA
+prop.table(table(survey_current$gender, useNA = "ifany"))*100
 ```
 
-## estimate
-
+## race
 ```{r}
-fit <- mlVAR(net_dat, vars=names.vars, idvar="unique_id", beepvar=beepvar, dayvar=dayvar, lags = 1,
-             temporal = "correlated", estimator = "lmer", contemporaneous = "correlated", nCores = 1, verbose = TRUE,
-             scale = TRUE, scaleWithin = FALSE, AR = FALSE,
-             MplusSave = TRUE, MplusName = "mlVAR", iterations = "(2000)",
-             chains = nCores)
+# table(dh3survey$ethnicity, useNA = "ifany")
+survey_current$ethnicity <- dplyr::recode(survey_current$ethnicity, "0"="American Indian or Alaskan Native", "1" = "AAPI", "2" = "Black, not of Hispanic origin (includes African American)", "3"="Hispanic", "4"="Multiracial, Biracial, Multiple Broad Categories", "5"="White, not of Hispanic origin (includes Caucasian, European American)", "6"="Not listed")
+table(survey_current$ethnicity, useNA = "ifany")
+# AAPI = 6
+# Native American = 1
+# Black = 3
+# Hispanic = 6
+# Multi-/bi-racial = 4
+# White = 88
+prop.table(table(survey_current$ethnicity, useNA = "ifany"))*100
 
-summary(fit)
-summary(fit)[1] # temporal
-summary(fit)[2] # contemporaneous
-summary(fit)[3] # between
-write.csv(summary(fit)[1], "./NetResultsJan2023/modefit_pdc.csv", row.names = FALSE)
-write.csv(summary(fit)[2], "./NetResultsJan2023/modefit_pcc.csv", row.names = FALSE)
-write.csv(summary(fit)[3], "./NetResultsJan2023/modefit_btwn.csv", row.names = FALSE)
+racedf<- data.frame(
+  race = unlist(as.data.frame(table(survey_current$ethnicity))[1]),
+  n = unlist(as.data.frame(table(survey_current$ethnicity))[2]),
+  prop = sapply(unlist(as.data.frame(table(survey_current$ethnicity))[2]), function(x) round((x/dim(survey_current)[1])*100, 2)))
 
-#### temporal network plot ####
-pdf("./NetResultsJan2023/Figs/temporalnetwork.pdf")
-pdc <- plot(fit, "temporal", nonsig = "hide", label.cex=1.3, alpha="0.05",
-          vsize=9, legend=F, edge.labels = TRUE, edge.label.position
-=.6, color=c('#b4dced'), mar=c(5,3,3,3))
-dev.off()
+racedf[,1] <- c("AAPI", "Native American", "Black", "Hispanic", "Multiracial", "White")
 
-# centrality plot
-pdf("./NetResultsJan2023/Figs/pdc_centplot.pdf")
-pdc_cent <- pdc %>% 
-  # centrPlot() +
-  centralityPlot()+
-  theme(legend.position = "none") +
- # facet_grid(rows = vars(measure)) +
-  theme(axis.text=element_text(size=13),
-      #  strip.text.y = element_text(size=15),
-        strip.text.x = element_text(size = 15),
-      axis.text.x = element_text(angle = 90))+
-  scale_x_continuous(
-  labels = scales::number_format(accuracy = 0.01))
-dev.off()
-ggsave("./NetResultsJan2023/Figs/pdc_centplot.png", pdc_cent)
+racedf2 <- racedf %>% 
+  mutate(csum=rev(cumsum(rev(n))),
+         pos = n/2 + lead(csum, 1),
+         pos = if_else(is.na(pos), n/2, pos))
+racedf %>% mutate(csum=rev(cumsum(rev(n))))
 
-pdc_cent_h <- 
-  pdc %>% 
-  # centrPlot() +
-  centPlot_cec()+
-    facet_grid(rows = vars(measure))+
-  theme(legend.position = "none") +
- # facet_grid(rows = vars(measure)) +
-  theme(axis.text=element_text(size=13),
-      #  strip.text.y = element_text(size=15),
-        strip.text.x = element_text(size = 15),
-      axis.text.x = element_text(angle = 90))+
-  scale_x_continuous(
-  labels = scales::number_format(accuracy = 0.01))
+library(ggrepel)
+racepie <- racedf %>% ggplot(aes(x = "" , y = n, fill = fct_inorder(race))) +
+  geom_col(width = 1, color = 1) +
+  coord_polar(theta = "y") +
+  scale_fill_manual(values = c("#FF9AA2", "#ffffcc", "#FFDAC1", "#E2F0CB","#B5EAD7", "#C7CEEA")) +
+ # scale_fill_brewer(palette = "Pastel1") +
+  geom_label_repel(data = racedf2,
+                   aes(y = pos, label = paste0(prop, "%")),
+                   size = 6, nudge_x = .6, show.legend = FALSE) +
+  guides(fill = guide_legend(title = "")) +
+  theme_void()+
+  theme(legend.text=element_text(size=16))
 
-ggsave("./NetResultsJan2023/Figs/pdc_centplothorizontal.png", pdc_cent_h, width = 10, height=6)
+# dir.create("./APSfigs") # create a path
+# ggsave(racepie, filename = "APSfigs/racepie.png", bg = "transparent", width = 8, height =4)
 
-# centralityTable(pdc)
-test=as.data.frame(centrality_auto(pdc)[1])
-write.csv(test, "./NetResultsJan2023/temporal centrality.csv", row.names = TRUE)
+table(survey_current$total_school_years)
+describe(survey_current$total_school_years) # 16.21 (min = 11, max = 22)  
+survey_current %>% filter(total_school_years<12)
+# DH024 17
+# DH064 15
+survey_current[which(survey_current$unique_id=="DH024"), which(colnames(survey_current)=="total_school_years")] <- 17
+survey_current[which(survey_current$unique_id=="DH064"), which(colnames(survey_current)=="total_school_years")] <- 15
 
-centrality_auto(pdc)
-# edges
-# getWmat(pdc)
-write.csv(getWmat(pdc), "./NetResultsJan2023/edges_pdc.csv", row.names = FALSE)
-
-# greatest in strength anxiety = .15
-# greatest out strength avoid emotions = .12
-
-#### contemporaneous network plot ####
-pdf("./NetResultsJan2023/Figs/contemporaneousnetwork.pdf")
-pcc <- plot(fit, "contemporaneous", nonsig = "hide", rule = "or", label.cex=1.3,
-          vsize=9, legend=F, alpha="0.05",edge.labels = TRUE,
-          color=c('#b4dced'))
-dev.off()
-
-# centrality plot
-pdf("./NetResultsJan2023/Figs/pcc_centplot.pdf")
-pdc_cent <- pcc %>% 
-  # centrPlot() +
-  centralityPlot()+
-  theme(legend.position = "none") +
- # facet_grid(rows = vars(measure)) +
-  theme(axis.text=element_text(size=13),
-      #  strip.text.y = element_text(size=15),
-        strip.text.x = element_text(size = 15),
-      axis.text.x = element_text(angle = 90))
-dev.off()
-
-test2=as.data.frame(centrality_auto(pcc)[1])
-write.csv(test2, "./NetResultsJan2023/contemporaneous centrality.csv", row.names = TRUE)
-
-# edges
-# getWmat(pcc_imp)
-write.csv(getWmat(pcc), "./NetResultsJan2023/edges_pcc.csv", row.names = FALSE)
+table(survey_current$work_status, useNA = "ifany")
+# 29 not working, 52 working full time, 26 working part time, 1 NA
+round(prop.table(table(survey_current$work_status, useNA = "ifany"))*100,2)
 ```
 
-# behavior net
+## diagnosis
 ```{r}
-net_dat <- dat[which(dat$beep<5),]
+table(dh3diagnoses$CurrentDx_general, useNA = "ifany")
+# AN = 35, ARFID = 0, BED = 4, BN = 17, OSFED = 52
 
-net_dat <- net_dat %>% dplyr::rename(physdis=physuncomfort, anxiety=anx)
+prop.table(table(dh3diagnoses$CurrentDx_general, useNA = "ifany"))*100
 
-dayvar = "day"
-beepvar = "beep"
-
-names.vars <- c("anxiety", "guilt", "physdis", "avoidemo", "restrict", "overeat", "fowg", "vomit")
-
-fit2 <- mlVAR(net_dat, vars=names.vars, idvar="unique_id", beepvar=beepvar, dayvar=dayvar, lags = 1,
-             temporal = "correlated", estimator = "lmer", contemporaneous = "correlated", nCores = 1, verbose = TRUE,
-             scale = TRUE, scaleWithin = FALSE, AR = FALSE,
-             MplusSave = TRUE, MplusName = "mlVAR", iterations = "(2000)",
-             chains = nCores)
-
-summary(fit2)
-summary(fit2)[1] # temporal
-summary(fit2)[2] # contemporaneous
-summary(fit2)[3] # between
-write.csv(summary(fit2)[1], "./NetResultsJan2023/modefitbx_pdc.csv", row.names = FALSE)
-write.csv(summary(fit2)[2], "./NetResultsJan2023/modefitbx_pcc.csv", row.names = FALSE)
-write.csv(summary(fit2)[3], "./NetResultsJan2023/modefitbx_btwn.csv", row.names = FALSE)
-
-#### temporal network plot ####
-pdf("./NetResultsJan2023/Figs/temporalnetworkbx.pdf")
-pdc2 <- plot(fit2, "temporal", nonsig = "hide", label.cex=1.3, alpha="0.05",
-          vsize=9, legend=F, edge.labels = TRUE, edge.label.position
-=.6, color=c('#b4dced'), mar=c(5,3,3,3))
-dev.off()
-
-# centrality plot
-pdf("./NetResultsJan2023/Figs/pdc_centplotbx.pdf")
-pdc_cent2 <- pdc2 %>% 
-  # centrPlot() +
-  centralityPlot()+
-  theme(legend.position = "none") +
- # facet_grid(rows = vars(measure)) +
-  theme(axis.text=element_text(size=13),
-      #  strip.text.y = element_text(size=15),
-        strip.text.x = element_text(size = 15),
-      axis.text.x = element_text(angle = 90))+
-  scale_x_continuous(
-  labels = scales::number_format(accuracy = 0.01))
-dev.off()
-ggsave("./NetResultsJan2023/Figs/pdc_centplotbx.png", pdc_cent2)
-
-centrality_auto(pdc2)[1]
-
-getWmat(pdc2)
+table(dh3diagnoses$CurrentDX_specific, useNA = "ifany")
+table(dh3diagnoses[which(dh3diagnoses$CurrentDx_general=="NoDx"),]$PastDX_general, useNA = "ifany")
 ```
+
+## age
+```{r}
+describe(dh3survey$age) # min 18, max 62, mean = 29.32 (SD = 9.20)
+```
+
+## tx hist
+```{r}
+table(dh3survey$treatmentq_1, useNA = "ifany")
+# 0 = 42, 1 = 66
+round(prop.table(table(dh3survey$treatmentq_1, useNA = "ifany"))*100,1)
+```
+
+## time eaten
+```{r}
+test = dat[which(dat$beep<5),]
+str(test$timesinceat) # integer
+(colMeans(is.na(test)))*100 # 44.04
+describe(test$timesinceat, na.rm = TRUE) # 199.07 (3.31), sd = 253.46 (4 hours) min = 0, max 1000 (over 16 hours)
+```
+
+# power
+```{r}
+ema.powercurve(NumbPart = 108,
+               NumbResp = 100,
+               days=25,
+               respday = 4,
+               Est_ICC = .5)
+```
+
+# add table with m, sds, iccs for the 4 vars at group level
+```{r}
+describe(na.omit(dat$anx)) # m = 2.87 SD = 1.39
+describe(na.omit(dat$guilt)) # m = 2.99, SD = 1.45
+describe(na.omit(dat$avoidemo)) # m = 2.99, SD = 1.60
+describe(na.omit(dat$physuncomfort)) # m = 2.82, SD = 1.58
+```
+# variability plots
+## long
+```{r}
+dat_plot <- dat
+dat_plot <- dat_plot[-which(dat_plot$beep==5),]
+
+dat_plot <- dat_plot[,c(1,3:5,8:10,13)]
+dat_plot <- dat_plot %>% dplyr::rename(avoid=avoidemo, phys=physuncomfort)
+dat_plot <- dat_plot %>% pivot_longer(
+  cols=!1:4,
+  names_to = "var",
+  values_to = "value"
+)
+```
+
+## idio plot
+```{r}
+idiovar_plot <- dat_plot %>% 
+  filter(!is.na(unique_id)) %>% 
+  filter(beepcont<101) %>% 
+  ggplot(aes(x=beepcont, y=value, color=var)) +
+  geom_line() +
+  theme_classic() +
+  labs(x="time", color="variable") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom") +
+  scale_color_manual(values=c("#E69F00", "#56B4E9", "#009E73","#CC79A7")) +
+  #scale_color_discrete(name = "variable") +
+  facet_wrap(~unique_id) 
+# ggsave(dxwaffle, filename = "APSfigs/dxwaffle.png", bg = "transparent", width = 4, height =4)
+ggsave(idiovar_plot, filename = "idiovarplot_3oct2023.png", bg="transparent", width=13)
+```
+
+## spaghetti plot
+```{r}
+dat_plot$var <- factor(dat_plot$var, levels=c("avoid", "phys", "anx", "guilt"))
+spaghetti <- dat_plot %>% 
+  filter(beepcont<101) %>% 
+  ggplot(aes(x=beepcont, y=value, group=unique_id, color=var)) + 
+  labs(x="time", y="", color="variable")+
+  stat_smooth(method = "lm", se = FALSE, size=.5)+
+  theme_classic() +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom")+
+  scale_color_manual(values=c("#56B4E9", "#CC79A7", "#E69F00","#009E73"))+
+  facet_wrap(vars(var), ncol=2)
+
+ggsave(spaghetti, filename = "spaghettiplot_current.png", bg = "transparent", width = 9)
+```
+
+
+## group plot
+```{r}
+dat_plot2 <- dat_plot[4:6]
+
+dat_plot2 <- dat_plot2 %>% 
+  dplyr::group_by(var, beepcont) %>% 
+  dplyr::summarise(mean=mean(value))
+
+group_plot <- dat_plot2 %>% 
+  dplyr::filter(beepcont<101) %>% 
+  ggplot(aes(x=beepcont, y=mean, color=var)) +
+  geom_line() +
+  theme_classic() +
+  labs(x="time", color="variable") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom") +
+  scale_color_manual(values=c("#E69F00", "#56B4E9", "#009E73","#CC79A7")) #+
+  # coord_cartesian(ylim = c(0, 6))
+
+ggsave(group_plot, filename = "groupplot_3oct2023.png", bg = "transparent", width = 9, height =5)
+```
+
+# save
+```{r}
+# save.image("premealemotions.RData")
+
+#### deidentify survey ####
+dh3survey_deident <- dh3survey[c(1,3:7,10:12, 15:17, 41)]
+
+write.csv(dh3survey_deident, "demos_deidentified.csv", row.names = FALSE)
+```
+
