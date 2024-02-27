@@ -22,13 +22,9 @@ library(psychometric)
 # library(EMAtools)
 library(r2mlm)
 
-dat_import <- read.csv("mlmdat_statetraitcent.csv", stringsAsFactors = TRUE)
-dat=dat_import
-dh3survey <- read.csv("DH3surveydat_cusack.csv", stringsAsFactors = TRUE)
-dh3diagnoses <- read.csv("DH3diagnosesforR.csv", stringsAsFactors = TRUE)
+dat <- read.csv("mlmdat_statetraitcent.csv", header = TRUE, sep = ",", na.strings=c("", "NA", "N/A", "n/a", "N/a", "-99"), stringsAsFactors = TRUE)
 
-dh3survey <- dh3survey[which(dh3survey$unique_id %in% unique(dat$unique_id)),]
-dh3diagnoses <- dh3diagnoses[which(dh3diagnoses$ID_Number %in% unique(dat$unique_id)),]
+# load("premealemotions.RData")
 ```
 
 # functions
@@ -205,6 +201,41 @@ ema.powercurve=function(NumbPart,NumbResp,days,respday,Est_ICC=.05,COL.8="red",C
     ggplot2::scale_color_manual(name="Effect Size",values=c(COL.8,COL.5,COL.2))
   return(PowerPlot1)
 }
+
+within_between_alpha <- function(data,participant){
+  # Load libraries
+  require(psych)
+  #require(alpha)
+  require(dplyr)
+  
+  # Get between-person alpha
+  between_person_alpha = psych::alpha(as.data.frame(lapply(select(data,-participant),as.numeric)),check.keys=TRUE)$total
+  
+  # Get within-person alpha
+  within_person_alphas = apply(unique(data[participant]),1,function(x){
+    select(subset(data,data[participant]==x),-participant)
+    psych::alpha(as.data.frame(lapply(select(subset(data,data[participant]==x),-participant),as.numeric)),check.keys=TRUE)$total
+  })
+  
+  # Create results
+  results = data.frame(matrix(nrow=3,ncol=length(between_person_alpha)+1))
+  colnames(results) = c('type',colnames(between_person_alpha))
+  
+  # Store results
+  results$type = c('between_person','within_person_mean','within_person_median')
+  results[1,2:(length(between_person_alpha)+1)] = between_person_alpha
+  results[2,2:(length(between_person_alpha)+1)] = apply(bind_rows(within_person_alphas),2,function(x) mean(x,na.rm=T))
+  results[3,2:(length(between_person_alpha)+1)] = apply(bind_rows(within_person_alphas),2,function(x) median(x,na.rm=T))
+  
+  # Return results
+  return(results)
+}
+
+#### EXAMPLE ####
+
+# Negative affect
+# negative_affect_data <- my_data_ml[,c('Participant','affect_angstig','affect_eenzaam','affect_gestrest','affect_schuldig','affect_somber','affect_onzeker')]
+# alpha_na <- within_between_alpha(negative_affect_data,'Participant')
 ```
 
 # Model Construction
@@ -223,7 +254,7 @@ avoid1 = lme(avoid_lead ~ 1,
 summary(avoid1)
 
 #### model 2: add level 1 effects of state variables and emotional avoidance at the previous time point ####
-avoid2 = lme(avoid_lead ~ 1 + avoidemo + anx_state,
+avoid2 = lme(avoid_lead ~ 1 + avoid_state + anx_state,
             random =~ 1|unique_id,
             data=dat,
             correlation= corCAR1(form=~beepcont),
@@ -233,17 +264,18 @@ intervals(avoid2)
 anova(avoid1, avoid2)
 
 #### model 3: add level 2 effects ####
-avoid3 = lme(avoid_lead ~ 1 + avoidemo + anx_state + anx_trait,
+avoid3 = lme(avoid_lead ~ 1 + avoid_state + anx_state + anx_trait,
             random =~ 1|unique_id,
             data=dat,
-            correlation= corCAR1(form=~beepcont),
+            #correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(avoid3)
 intervals(avoid3)
 anova(avoid2, avoid3)
 
+
 #### model 4: add random slopes for state var ####
-# avoid4 = lme(avoid_lead ~ 1 + avoidemo + anx_state + cent_anx,
+# avoid4 = lme(avoid_lead ~ 1 + avoid_state + anx_state + cent_anx,
 #             random =~ 1 + anx_state|unique_id,
 #             data=dat,
 #             correlation= corCAR1(form=~beepcont),
@@ -271,7 +303,7 @@ anx1 = lme(anx_lead ~ 1,
 summary(anx1)
 
 #### model 2: add level 1 effects of state variables and emotional avoidance at the previous time point ####
-anx2 = lme(anx_lead ~ 1 + anx + avoid_state,
+anx2 = lme(anx_lead ~ 1 + anx_state + avoid_state,
             random =~ 1|unique_id,
             data=dat,
             correlation= corCAR1(form=~beepcont),
@@ -280,18 +312,19 @@ summary(anx2)
 anova(anx1, anx2)
 
 #### model 3: add level 2 effects ####
-anx3 = lme(anx_lead ~ 1 + anx + avoid_state + cent_avoid,
+anx3 = lme(anx_lead ~ 1 + anx_state + avoid_state + cent_avoid,
             random =~ 1|unique_id,
             data=dat,
-            correlation= corCAR1(form=~beepcont),
+            #correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(anx3)
 intervals(anx3)
 exp(attr(avoid3$apVar, "Pars"))^2
 anova.lme(anx2, anx3)
 
+
 #### model 4: add random slopes for state var ####
-# anx4 = lme(anx_lead ~ 1 + anx + avoid_state + cent_avoid,
+# anx4 = lme(anx_lead ~ 1 + anx_state + avoid_state + cent_avoid,
 #             random =~ 1 + avoid_state|unique_id,
 #             data=dat,
 #             na.action = na.exclude)
@@ -306,7 +339,7 @@ plot(anx3)
 ## Anx guilt avoid
 ### H2a: anx guilt to avoid
 ```{r}
-avoidcomb = lme(avoid_lead ~ 1 + avoidemo + anx_state +guilt_state,
+avoidcomb = lme(avoid_lead ~ 1 + avoid_state + anx_state +guilt_state,
             random =~ 1|unique_id,
             data=dat,
             correlation= corCAR1(form=~beepcont),
@@ -314,16 +347,16 @@ avoidcomb = lme(avoid_lead ~ 1 + avoidemo + anx_state +guilt_state,
 summary(avoidcomb)
 
 #### model 2: add level 1 effects ####
-avoidcomb2 = lme(avoid_lead ~ 1 + avoidemo + anx_state + cent_anx + guilt_state+cent_guilt,
+avoidcomb2 = lme(avoid_lead ~ 1 + avoid_state + anx_state + cent_anx + guilt_state+cent_guilt,
             random =~ 1|unique_id,
             data=dat,
-            correlation= corCAR1(form=~beepcont),
+            #correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(avoidcomb2)
 intervals(avoidcomb2)
 
 #### model 3: add random slopes for state var ####
-# avoidcomb3 = lme(avoid_lead ~ 1 + avoidemo + anx_state + cent_anx+ guilt_state+cent_guilt,
+# avoidcomb3 = lme(avoid_lead ~ 1 + avoid_state + anx_state + cent_anx+ guilt_state+cent_guilt,
 #             random =~ 1 + anx_state+guilt_state|unique_id,
 #             data=dat,
 #             correlation= corCAR1(form=~beepcont),
@@ -346,7 +379,7 @@ guilt1 = lme(guilt_lead ~ 1,
 summary(guilt1)
 
 #### model 2: add level 1 effects of state variables and guilt at the previous time point  ####
-guilt2 = lme(guilt_lead ~ 1 + guilt + avoid_state,
+guilt2 = lme(guilt_lead ~ 1 + guilt_state + avoid_state,
             random =~ 1|unique_id,
             data=dat,
             correlation= corCAR1(form=~beepcont),
@@ -354,33 +387,33 @@ guilt2 = lme(guilt_lead ~ 1 + guilt + avoid_state,
 summary(guilt2)
 
 #### model 3: add level 2 effects ####
-guilt3 = lme(guilt_lead ~ 1 + guilt + avoid_state + cent_avoid,
+guilt3 = lme(guilt_lead ~ 1 + guilt_state + avoid_state + cent_avoid,
             random =~ 1|unique_id,
             data=dat,
-            correlation= corCAR1(form=~beepcont),
+           # correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
 summary(guilt3)
 intervals(guilt3)
 anova(guilt2,guilt3)
 
 #### model 4: add random slopes for state var ####
-guilt4 = lme(guilt_lead ~ 1 + guilt + avoid_state + cent_avoid,
-            random =~ 1 + avoid_state|unique_id,
-            data=dat,
-            na.action = na.exclude)
-summary(guilt4)
-intervals(guilt4)
-anova(guilt3,guilt4)
+# guilt4 = lme(guilt_lead ~ 1 + guilt_state + avoid_state + cent_avoid,
+#             random =~ 1 + avoid_state|unique_id,
+#             data=dat,
+#             na.action = na.exclude)
+# summary(guilt4)
+# intervals(guilt4)
+# anova(guilt3,guilt4)
 
-qqnorm(residuals(guilt4))
-qqnorm(guilt4, ~ranef(., level=1))
-plot(guilt4)
+qqnorm(residuals(guilt3))
+qqnorm(guilt3, ~ranef(., level=1))
+plot(guilt3)
 ```
 
 ## Phys and avoid
 ### H3a: phys to avoid
 ```{r}
-avoid_phys = lme(avoid_lead ~ 1 + avoidemo + phys_state,
+avoid_phys = lme(avoid_lead ~ 1 + avoid_state + phys_state,
             random =~ 1|unique_id,
             data=dat,
             correlation= corCAR1(form=~beepcont),
@@ -389,7 +422,7 @@ summary(avoid_phys)
 intervals(avoid_phys)
 
 ### add level 2 ###
-avoid_phys2 = lme(avoid_lead ~ 1 + avoidemo + phys_state+cent_phys,
+avoid_phys2 = lme(avoid_lead ~ 1 + avoid_state + phys_state+cent_phys,
             random =~ 1|unique_id,
             data=dat,
             correlation= corCAR1(form=~beepcont),
@@ -397,7 +430,7 @@ avoid_phys2 = lme(avoid_lead ~ 1 + avoidemo + phys_state+cent_phys,
 summary(avoid_phys2)
 intervals(avoid_phys2)
 
-avoid_phys2_noAR1 = lme(avoid_lead ~ 1 + avoidemo + phys_state+cent_phys,
+avoid_phys2_noAR1 = lme(avoid_lead ~ 1 + avoid_state + phys_state+cent_phys,
             random =~ 1|unique_id,
             data=dat,
             #correlation= corCAR1(form=~beepcont),
@@ -408,7 +441,7 @@ intervals(avoid_phys2_noAR1)
 anova(avoid_phys2, avoid_phys2_noAR1)
 
 ### add random slopes ###
-# avoid_phys3 = lme(avoid_lead ~ 1 + avoidemo + phys_state+cent_phys,
+# avoid_phys3 = lme(avoid_lead ~ 1 + avoid_state + phys_state+cent_phys,
 #             random =~ 1 + phys_state|unique_id,
 #             data=dat,
 #             correlation= corCAR1(form=~beepcont),
@@ -436,7 +469,7 @@ phys1 = lme(phys_lead ~ 1,
 summary(phys1)
 
 #### model 2: add level 1 effects of state var ####
-phys2 = lme(phys_lead ~ 1 + physuncomfort + avoid_state,
+phys2 = lme(phys_lead ~ 1 + phys_state + avoid_state,
             random =~ 1|unique_id,
             data=dat,
             correlation= corCAR1(form=~beepcont),
@@ -444,7 +477,7 @@ phys2 = lme(phys_lead ~ 1 + physuncomfort + avoid_state,
 summary(phys2)
 
 #### model 3: add level 2 effects ####
-phys3 = lme(phys_lead ~ 1 + physuncomfort + avoid_state + cent_avoid,
+phys3 = lme(phys_lead ~ 1 + phys_state + avoid_state + cent_avoid,
             random =~ 1|unique_id,
             data=dat,
             correlation= corCAR1(form=~beepcont),
@@ -452,7 +485,7 @@ phys3 = lme(phys_lead ~ 1 + physuncomfort + avoid_state + cent_avoid,
 summary(phys3)
 intervals(phys3, which = "fixed")
 
-phys3_noAR1 = lme(phys_lead ~ 1 + physuncomfort + avoid_state + cent_avoid,
+phys3_noAR1 = lme(phys_lead ~ 1 + phys_state + avoid_state + cent_avoid,
             random =~ 1|unique_id,
             data=dat,
             #correlation= corCAR1(form=~beepcont),
@@ -462,7 +495,7 @@ intervals(phys3_noAR1)
 anova(phys3, phys3_noAR1)
 
 #### model 4: add random slopes for state variables ####
-# phys4 = lme(phys_lead ~ 1 + physuncomfort + avoid_state + cent_avoid,
+# phys4 = lme(phys_lead ~ 1 + phys_state + avoid_state + cent_avoid,
 #             random =~ 1 + avoid_state|unique_id,
 #             data=dat,
 #             correlation= corCAR1(form=~beepcont),
@@ -478,7 +511,7 @@ plot(phys3_noAR1)
 ## Phys Emotions
 ### emo to phys
 ```{r}
-emophyscomb = lme(phys_lead ~ 1 + physuncomfort + anx_state +guilt_state,
+emophyscomb = lme(phys_lead ~ 1 + phys_state + anx_state +guilt_state,
             random =~ 1|unique_id,
             data=dat,
             correlation= corCAR1(form=~beepcont),
@@ -486,7 +519,7 @@ emophyscomb = lme(phys_lead ~ 1 + physuncomfort + anx_state +guilt_state,
 summary(emophyscomb)
 
 #### model 3: add level 2 effects ####
-emophyscomb2 = lme(phys_lead ~ 1 + physuncomfort + anx_state + cent_anx + guilt_state+cent_guilt,
+emophyscomb2 = lme(phys_lead ~ 1 + phys_state + anx_state + cent_anx + guilt_state+cent_guilt,
             random =~ 1|unique_id,
             data=dat,
             #correlation= corCAR1(form=~beepcont),
@@ -495,7 +528,7 @@ summary(emophyscomb2)
 intervals(emophyscomb2)
 
 #### model 4: add random slopes for state variables ####
-emophyscomb3 = lme(phys_lead ~ 1 + physuncomfort + anx_state + cent_anx+ guilt_state+cent_guilt,
+emophyscomb3 = lme(phys_lead ~ 1 + phys_state + anx_state + cent_anx+ guilt_state+cent_guilt,
             random =~ 1 + anx_state+guilt_state|unique_id,
             data=dat,
             #correlation= corCAR1(form=~beepcont),
@@ -511,7 +544,7 @@ plot(emophyscomb2)
 ### phys to anx
 ```{r}
 summary(anx_phys2)
-anx_phys2 = lme(anx_lead ~ 1 + anx + phys_state,
+anx_phys2 = lme(anx_lead ~ 1 + anx_state + phys_state,
             random =~ 1|unique_id,
             data=dat,
             correlation= corCAR1(form=~beepcont),
@@ -520,7 +553,7 @@ summary(anx_phys2)
 intervals(anx_phys2)
 
 ### add level 2 ###
-anx_phys2_noAR1 = lme(anx_lead ~ 1 + anx + phys_state+cent_phys,
+anx_phys2_noAR1 = lme(anx_lead ~ 1 + anx_state + phys_state+cent_phys,
             random =~ 1|unique_id,
             data=dat,
             #correlation= corCAR1(form=~beepcont),
@@ -538,7 +571,7 @@ plot(anx_phys2_noAR1)
 
 ### phys to guilt
 ```{r}
-guilt_phys = lme(guilt_lead ~ 1 + guilt + phys_state,
+guilt_phys = lme(guilt_lead ~ 1 + guilt_state + phys_state,
             random =~ 1|unique_id,
             data=dat,
             correlation= corCAR1(form=~beepcont),
@@ -546,7 +579,7 @@ guilt_phys = lme(guilt_lead ~ 1 + guilt + phys_state,
 summary(guilt_phys)
 
 ### add level 2 ###
-guilt_phys2 = lme(guilt_lead ~ 1 + guilt + phys_state+cent_phys,
+guilt_phys2 = lme(guilt_lead ~ 1 + guilt_state + phys_state+cent_phys,
             random =~ 1|unique_id,
             data=dat,
             correlation= corCAR1(form=~beepcont),
@@ -554,7 +587,7 @@ guilt_phys2 = lme(guilt_lead ~ 1 + guilt + phys_state+cent_phys,
 summary(guilt_phys2)
 intervals(guilt_phys2)
 
-guilt_phys2_noAR1 = lme(guilt_lead ~ 1 + guilt + phys_state+cent_phys,
+guilt_phys2_noAR1 = lme(guilt_lead ~ 1 + guilt_state + phys_state+cent_phys,
             random =~ 1|unique_id,
             data=dat,
             #correlation= corCAR1(form=~beepcont),
@@ -564,7 +597,7 @@ intervals(guilt_phys2_noAR1)
 anova(guilt_phys2, guilt_phys2_noAR1)
 
 ### add random slopes ###
-guilt_phys3 = lme(guilt_lead ~ 1 + guilt + phys_state+cent_phys,
+guilt_phys3 = lme(guilt_lead ~ 1 + guilt_state + phys_state+cent_phys,
             random =~ 1 + phys_state|unique_id,
             data=dat,
             correlation= corCAR1(form=~beepcont),
@@ -591,38 +624,42 @@ plot(guilt_phys2_noAR1)
 # RESULTS SUMMARY
 ## H1a summary
 
-avoid3 = lme(avoid_lead ~ 1 + avoidemo + anx_state + anx_trait,
+avoid3 = lme(avoid_lead ~ 1 + avoid_state + anx_state + anx_trait,
             random =~ 1|unique_id,
             data=dat,
-            correlation= corCAR1(form=~beepcont),
+            #correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
             
 ```{r}
 summary(avoid3)
 intervals(avoid3)
+exp(attr(avoid3$apVar, "Pars"))^2
 lme.dscore(avoid3, dat, "nlme")
 r2mlm(avoid3)
 ```
 
 ## H1b summary
-anx3 = lme(anx_lead ~ 1 + anx + avoid_state + cent_avoid,
+
+anx3 = lme(anx_lead ~ 1 + anx_state + avoid_state + cent_avoid,
             random =~ 1|unique_id,
             data=dat,
-            correlation= corCAR1(form=~beepcont),
+            #correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
+            
 ```{r}
 summary(anx3)
 intervals(anx3)
+exp(attr(anx3$apVar, "Pars"))^2
 lme.dscore(anx3, dat, "nlme")
 r2mlm(anx3)
 ```
 
 ## H2a summary
 
-avoidcomb2 = lme(avoid_lead ~ 1 + avoidemo + anx_state + cent_anx + guilt_state+cent_guilt,
+avoidcomb2 = lme(avoid_lead ~ 1 + avoid_state + anx_state + cent_anx + guilt_state+cent_guilt,
             random =~ 1|unique_id,
             data=dat,
-            correlation= corCAR1(form=~beepcont),
+            #correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
             
 ```{r}
@@ -630,25 +667,46 @@ summary(avoidcomb2)
 intervals(avoidcomb2)
 lme.dscore(avoidcomb2, dat, "nlme")
 r2mlm(avoidcomb2)
+
+# get SE for random effects
+exp(attr(avoidcomb2$apVar, "Pars"))^2
+
+# double check
+.1844799^2 # 0.03403283
+.6609298^2 # .44 int
 ```
 
 ## H2b summary
 
-guilt4 = lme(guilt_lead ~ 1 + guilt + avoid_state + cent_avoid,
-            random =~ 1 + avoid_state|unique_id,
+guilt3 = lme(guilt_lead ~ 1 + guilt_state + avoid_state + cent_avoid,
+            random =~ 1|unique_id,
             data=dat,
+           # correlation= corCAR1(form=~beepcont),
             na.action = na.exclude)
             
 ```{r}
-summary(guilt4)
-intervals(guilt4)
-lme.dscore(guilt4, dat, "nlme")
-r2mlm(guilt4)
+summary(guilt3)
+intervals(guilt3)
+lme.dscore(guilt3, dat, "nlme")
+r2mlm(guilt3)
+
+# get SE for random effects
+exp(attr(guilt3$apVar, "Pars"))^2
+# struct.unique_id1  0.31353857
+# struct.unique_id1 0.04515177
+# struct.unique_id1 0.75770315
+# lsigma 0.83947259
+
+# double check
+0.5599452^2 # 0.3135386 intercept
+0.2124895^2 # 0.04515179 avoid state slope
+(-0.069)^2 # 0.004761 corr btwn random intercept and slop
+0.9162274^2 # 0.8394726 resid
 ```
 
 ## H3a summary (no AR1)
 
-avoid_phys2_noAR1 = lme(avoid_lead ~ 1 + avoidemo + phys_state+cent_phys,
+avoid_phys2_noAR1 = lme(avoid_lead ~ 1 + avoid_state + phys_state+cent_phys,
             random =~ 1|unique_id,
             data=dat,
             #correlation= corCAR1(form=~beepcont),
@@ -658,12 +716,20 @@ avoid_phys2_noAR1 = lme(avoid_lead ~ 1 + avoidemo + phys_state+cent_phys,
 summary(avoid_phys2_noAR1)
 intervals(avoid_phys2_noAR1)
 lme.dscore(avoid_phys2_noAR1, dat, "nlme")
+# get SE for random effects
+exp(attr(avoid_phys2_noAR1$apVar, "Pars"))^2
+# struct.unique_id1  0.2423454
+# lsigma 0.6588145
+
+# double check
+0.4922859^2 # 0.2423454 intercept
+0.8116739^2 # 0.6588145 resid
 r2mlm(avoid_phys2_noAR1)
 ```
 
 ## H3b summary (no AR1)
 
-phys3_noAR1 = lme(phys_lead ~ 1 + physuncomfort + avoid_state + cent_avoid,
+phys3_noAR1 = lme(phys_lead ~ 1 + phys_state + avoid_state + cent_avoid,
             random =~ 1|unique_id,
             data=dat,
             #correlation= corCAR1(form=~beepcont),
@@ -673,13 +739,21 @@ phys3_noAR1 = lme(phys_lead ~ 1 + physuncomfort + avoid_state + cent_avoid,
 summary(phys3_noAR1)
 intervals(phys3_noAR1)
 lme.dscore(phys3_noAR1, dat, "nlme")
+# get SE for random effects
+exp(attr(phys3_noAR1$apVar, "Pars"))^2
+# struct.unique_id1  0.2686168
+# lsigma 0.6338602
+
+# double check
+0.5182825^2 # 0.2686167 intercept
+0.7961534^2 # 0.6338602 resid
 r2mlm(phys3_noAR1)
 ```
 
 ## H4
 ### emo to phys
 
-emophyscomb3 = lme(phys_lead ~ 1 + physuncomfort + anx_state + cent_anx+ guilt_state+cent_guilt,
+emophyscomb3 = lme(phys_lead ~ 1 + phys_state + anx_state + cent_anx+ guilt_state+cent_guilt,
             random =~ 1 + anx_state+guilt_state|unique_id,
             data=dat,
             #correlation= corCAR1(form=~beepcont),
@@ -689,12 +763,24 @@ emophyscomb3 = lme(phys_lead ~ 1 + physuncomfort + anx_state + cent_anx+ guilt_s
 summary(emophyscomb3)
 intervals(emophyscomb3)
 lme.dscore(emophyscomb3, dat, "nlme")
+# get SE for random effects
+exp(attr(emophyscomb3$apVar, "Pars"))^2
+# struct.unique_id1  0.22326485
+# 2 0.04886095
+# 3 0.05187247
+# lsigma 0.59445899
+
+# double check
+0.8825691^2 # 0.7789282 intercept
+0.2268036^2 # 0.05143987 anx
+0.2333909^2 # 0.05447131 guilt
+0.7710117^2 # 0.594459 resid
 r2mlm(emophyscomb3)
 ```
 
 ### phys to anx
 
-anx_phys2_noAR1 = lme(anx_lead ~ 1 + anx + phys_state+cent_phys,
+anx_phys2_noAR1 = lme(anx_lead ~ 1 + anx_state + phys_state+cent_phys,
             random =~ 1|unique_id,
             data=dat,
             #correlation= corCAR1(form=~beepcont),
@@ -704,12 +790,20 @@ anx_phys2_noAR1 = lme(anx_lead ~ 1 + anx + phys_state+cent_phys,
 summary(anx_phys2_noAR1)
 intervals(anx_phys2_noAR1)
 lme.dscore(anx_phys2_noAR1, dat, "nlme")
+# get SE for random effects
+exp(attr(anx_phys2_noAR1$apVar, "Pars"))^2
+# struct.unique_id1  0.2787632
+# lsigma 0.8005689
+
+# double check
+0.5279803^2 # 0.2787632 intercept
+0.8947451^2 # 0.8005688 resid
 r2mlm(anx_phys2_noAR1)
 ```
 
 ### phys to guilt
 
-guilt_phys2_noAR1 = lme(guilt_lead ~ 1 + guilt + phys_state+cent_phys,
+guilt_phys2_noAR1 = lme(guilt_lead ~ 1 + guilt_state + phys_state+cent_phys,
             random =~ 1|unique_id,
             data=dat,
             #correlation= corCAR1(form=~beepcont),
@@ -719,18 +813,26 @@ guilt_phys2_noAR1 = lme(guilt_lead ~ 1 + guilt + phys_state+cent_phys,
 summary(guilt_phys2_noAR1)
 intervals(guilt_phys2_noAR1)
 lme.dscore(guilt_phys2_noAR1, dat, "nlme")
+# get SE for random effects
+exp(attr(guilt_phys2_noAR1$apVar, "Pars"))^2
+# struct.unique_id1  0.2528268
+# lsigma 0.8721444
+
+# double check
+0.5028189^2 # 0.2528268 intercept
+0.9338867^2 # 0.8721444 resid
 r2mlm(guilt_phys2_noAR1)
 ```
 
-
 # corrs
 ```{r}
-cors <- corr.test(dat[c(8:10,13,31:34)])
-cors$r
-min(cors$r)
-max(cors$r)
-cors$r[c(1:4), c(1:4)]
-cors$p[c(1:4), c(1:4)]
+zcordf <- dat %>% 
+  filter(beep<5) %>% 
+  group_by(unique_id) %>% 
+  summarise(anx_mean=mean(anx), guilt_mean=mean(guilt), avoid_mean=mean(avoidemo), phys_mean=mean(physuncomfort)) %>% 
+  ungroup()
+
+corr.test(zcordf[-1], adjust = "holm")
 ```
 
 # demos
@@ -845,6 +947,7 @@ describe(na.omit(dat$guilt)) # m = 2.99, SD = 1.45
 describe(na.omit(dat$avoidemo)) # m = 2.99, SD = 1.60
 describe(na.omit(dat$physuncomfort)) # m = 2.82, SD = 1.58
 ```
+
 # variability plots
 ## long
 ```{r}
@@ -927,4 +1030,255 @@ dh3survey_deident <- dh3survey[c(1,3:7,10:12, 15:17, 41)]
 
 write.csv(dh3survey_deident, "demos_deidentified.csv", row.names = FALSE)
 ```
+
+# reliability
+
+R2 Comment 11   
+*I appreciated the authors' willingness to work on providing reliability information for their multilevel data using variance components analysis. I believe that the authors need to use the different sources of variance in the ANOVA table they reported in their letter to the editor, computing reliability based on those sources of variance. The mlr (or multilevel.reliability) function should be able to make those calculations automatically (see Revelle & Wilt's "Analyzing dynamic data: A tutorial" paper): Analyzing dynamic data: A tutorial - ScienceDirect). They can also see: multilevel.reliability function - RDocumentation*
+
+```{r}
+load("premealemotions.RData")
+library(tidyverse)
+library(psych)
+library(VCA)
+
+# table(dat$unique_id, useNA = "ifany")
+# keep participants with 125
+# tt <- table(dat$unique_id)
+# df2 <- dat[dat$unique_id %in% names(tt[tt == 125]), ]
+# table(df2$unique_id)
+# df2<-droplevels(df2)
+test <- dat
+nth.delete<-function(dataframe, n)dataframe[-(seq(n,to=nrow(dataframe),by=n)),]
+test <- nth.delete(test, 5)
+```
+
+## mlr
+```{r}
+# rel
+emorel <- mlr(test, "unique_id", "beepcont", items = c("anx", "guilt", "physuncomfort", "avoidemo"), aov=FALSE, lmer = TRUE)
+# Warning: diag(.) had 0 or NA entries; non-finite result is doubtfulAt least one item had no variance  when finding alpha for subject = DH029. Proceed with caution
+# View(test[which(test$unique_id=="DH029"), c(1,5,8:10,13)]) # physuncomfort all 6s
+
+alphadf <- emorel$alpha[,c(1,3)]
+ 
+select <- c("anx", "guilt", "avoidemo", "physuncomfort")
+emotionkeys <- list(anxiety="anx",
+                    guilt="guilt", 
+                    avoid = "avoidemo",
+                    phys = "physuncomfort")
+emotionscores <- scoreItems(keys = emotionkeys, items = test[select], min = 0 , max = 6) # Number of categories should be increased  in order to count frequencies. 
+
+# emotionscores$scores
+emodf <- cbind(test[c(1,5)],emotionscores$scores)
+mlPlot(emodf, grp="unique_id", Time = "beepcont", items = 3:6, type = "p")
+
+stats.emo <- statsBy(emodf, group = "unique_id", cors = TRUE)
+stats.emo$within
+stats.emo$pooled
+stats.emo$ICC2
+# anxiety = 0.9893515
+# guilt = 0.9890796 
+# phys = 0.9923235 
+# avoid emo = 0.9924608 
+
+# within person pwg reflect pooled number of cases within groups
+stats.emo$pwg # < .001
+
+# pooled within group correlations rwg confidence intervals of pooled within group correlations ci.wg
+stats.emo$ci.wg
+
+# etawg: correlation of the data with the within group values
+stats.emo$etawg
+# anx=  0.7522609 
+# guilt = 0.7563587 
+# phys = 0.6960401 
+# avoid = 0.6927954
+
+# between person pbg (number of groups)
+stats.emo$pbg
+# sample sized weighted between group correlations rbg
+# confidence intervals of rbg c.bg
+stats.emo$ci.bg
+
+# etabg: correlation of the data with group means 
+stats.emo$etabg
+#  anx = 0.6588653   
+# guilt = 0.6541571   
+# avoid = 0.7180029   
+# phys =0.7211342 
+
+ar <- autoR(emodf[2:6], group = emodf["unique_id"])
+# View(ar$autoR)
+alphadf <- cbind(alphadf,
+                 stats.emo$within,
+                 ar$autoR[,2:5])
+
+
+# reliability of average of all ratings across all times and times (fixed time effects) RKF
+emorel$RkF # 0.9990704 # the reliability of individual differences over k fixed time points and m multiple items
+
+# generalizability of a single time point across all items (random item effects) R1R
+emorel$R1R # 0.6585325
+
+# generalizability of average time points across all items (random effects) RKR
+emorel$RkR # 0.9958689
+
+# Generalizability of change scores RC
+emorel$Rc # 0.7737115
+
+# generalizability of K random effects nested RKRN
+emorel$RkRn # 0.99586
+
+# reliability of between person differences averaged over items RCN 
+emorel$Rcn # 0.5898699 # generalizability of within person variations averaged over items (time nested within people)
+
+# alpha = Within subject alpha over items and time.
+emorel$alpha
+```
+
+
+```{r}
+anx_test <- test %>% filter(!is.na(anx))
+
+varPlot(form=anx~unique_id, Data=anx_test, 
+        type=1,
+        VARtype = "CV", 
+        htab = 0.2, 
+        YLabel = list(text="anxiety value",line=2, cex=1.25),
+        Points = list(cex=.2),
+        ylim = c(1,6),
+        VarLab=list(list(cex=.5,srt=90), list(srt=90)))
+
+# dat_subset$unique_id <- factor(dat_subset$unique_id)
+vcafit_anx <- fitVCA(anx~unique_id, anx_test)
+vcafit_anx
+inf.anx <- VCAinference(vcafit_anx, VarVC=TRUE)
+inf.anx
+
+dat_subset_DH001 <- dat_subset %>% filter(unique_id=="DH001")
+varPlot(form=anx~unique_id/day, Data=dat_subset_DH001, MeanLine = list(var="int"))
+
+itemNames <- c("anx", "guilt","avoidemo", "physuncomfort")
+test %>%
+    group_by(unique_id) %>%    
+     summarise(alpha = alpha(across(all_of(itemNames)))$total$raw_alpha, 
+     omega = ci.reliability(across(all_of(itemNames)), 
+    type = "omega", interval.type = "none")$est, .groups = 'drop')
+
+alpha(dat_subset[,which(colnames(dat_subset)=="anx")]) # .86
+psychometric::alpha(dat_subset$anx)
+
+# DH029 no variance
+
+# RKF reliability of average of all ratings across all items and times
+# sigma sq p population variance
+# sigma sq i variance between items
+# sigma sq t variance over time
+
+vcafit_anxtime <- fitVCA(anx~unique_id:beepcont, anx_test)
+
+```
+
+## try 2
+```{r}
+#### anx ####
+anx.rel <- mlr(anx_test, grp="unique_id", Time = "beepcont", items = "anx", aov = FALSE, lmer = TRUE, lme=FALSE, long = TRUE, na.action = "na.omit")
+
+# try multiple items
+mg <- multilevel.reliability(test,grp="unique_id",Time="beepcont",items= c("anx","guilt","avoidemo", "physuncomfort"), plot=TRUE)
+```
+
+## test
+```{r}
+set.seed(42)
+x <- sim.multi(n.obs = 4, nvar = 4, nfact = 2, days = 6, ntrials = 6, plot=TRUE, phi.i = c(-.7, 0, 0, .7), loading = .6)
+# View(x)
+raw <- round(x[3:8])
+# View(raw)
+raw[1:4] <- raw[1:4] + 6 
+# make a 'Fat' version
+XFat <- reshape(raw, idvar="id", timevar = "time", times = 1:4, direction = "wide")
+# View(XFat)
+# now make it wide
+XWide <- reshape(XFat, idvar = "id", varying = 2:25, direction = "long")
+# View(XWide)
+Xwide <- arrange(XWide, id)
+
+# add trait information
+traits <- data.frame(id=1:4, extraversion=c(5,10,15,20), neuroticism=c(10,5,15,10))
+Xwide.traits <- merge(Xwide, traits, by="id")
+```
+
+## test 2
+```{r}
+shrout <- structure(list(Person = c(1L, 2L, 3L, 4L, 5L, 1L, 2L, 3L, 4L, 
+5L, 1L, 2L, 3L, 4L, 5L, 1L, 2L, 3L, 4L, 5L), Time = c(1L, 1L, 
+1L, 1L, 1L, 2L, 2L, 2L, 2L, 2L, 3L, 3L, 3L, 3L, 3L, 4L, 4L, 4L, 
+4L, 4L), Item1 = c(2L, 3L, 6L, 3L, 7L, 3L, 5L, 6L, 3L, 8L, 4L, 
+4L, 7L, 5L, 6L, 1L, 5L, 8L, 8L, 6L), Item2 = c(3L, 4L, 6L, 4L, 
+8L, 3L, 7L, 7L, 5L, 8L, 2L, 6L, 8L, 6L, 7L, 3L, 9L, 9L, 7L, 8L
+), Item3 = c(6L, 4L, 5L, 3L, 7L, 4L, 7L, 8L, 9L, 9L, 5L, 7L, 
+9L, 7L, 8L, 4L, 7L, 9L, 9L, 6L)), .Names = c("Person", "Time", 
+"Item1", "Item2", "Item3"), class = "data.frame", row.names = c(NA, 
+-20L))
+
+mg <- mlr(shrout,grp="Person",Time="Time",items=3:5) 
+mg <- multilevel.reliability(shrout,grp="Person",Time="Time",items= c("Item1","Item2","Item3"),plot=TRUE)
+```
+
+
+
+
+# alpha
+## function
+```{r}
+within_between_alpha <- function(data,participant){
+  # Load libraries
+  require(psych)
+  #require(alpha)
+  require(dplyr)
+  
+  # Get between-person alpha
+  between_person_alpha = psych::alpha(as.data.frame(lapply(dplyr::select(data,-participant),as.numeric)),check.keys=TRUE)$total
+  
+  # Get within-person alpha
+  within_person_alphas = apply(unique(data[participant]),1,function(x){
+    dplyr::select(subset(data,data[participant]==x),-participant)
+    psych::alpha(as.data.frame(lapply(select(subset(data,data[participant]==x),-participant),as.numeric)),check.keys=TRUE)$total
+  })
+
+  # Create results
+  results = data.frame(matrix(nrow=3,ncol=length(between_person_alpha)+1))
+  colnames(results) = c('type',colnames(between_person_alpha))
+  
+  # Store results
+  results$type = c('between_person','within_person_mean','within_person_median')
+  results[1,2:(length(between_person_alpha)+1)] = between_person_alpha
+  results[2,2:(length(between_person_alpha)+1)] = apply(bind_rows(within_person_alphas),2,function(x) mean(x,na.rm=T))
+  results[3,2:(length(between_person_alpha)+1)] = apply(bind_rows(within_person_alphas),2,function(x) median(x,na.rm=T))
+  
+  # Return results
+  return(results)
+}
+
+#### EXAMPLE ####
+
+# Negative affect
+# negative_affect_data <- my_data_ml[,c('Participant','affect_angstig','affect_eenzaam','affect_gestrest','affect_schuldig','affect_somber','affect_onzeker')]
+# alpha_na <- within_between_alpha(negative_affect_data,'Participant')
+```
+
+## apply
+```{r}
+load("premealemotions.RData")
+library(alpha)
+anxalphadat <- dat %>% filter(beep<5) %>% dplyr::select(unique_id, anx)
+within_between_alpha(anxalphadat, 'unique_id')
+
+# between_person_alpha =
+psych::alpha(as.data.frame(lapply(dplyr::select(anxalphadat,-'unique_id'),as.numeric)),check.keys=TRUE)$total
+psych::alpha(anxalphadat)
+```
+
 
